@@ -351,6 +351,22 @@ JNIEXPORT jint JNICALL Java_cloud_unum_usearch_Index_c_1search_1into_1f64_1buffe
 JNIEXPORT jint JNICALL Java_cloud_unum_usearch_Index_c_1search_1into_1i8_1buffer
   (JNIEnv *, jclass, jlong, jobject, jobject, jlong);
 
+/*
+ * Class:     cloud_unum_usearch_Index
+ * Method:    c_search_i8_threshold
+ * Signature: (J[BJFZ)Lcloud/unum/usearch/Index$SearchResult;
+ */
+JNIEXPORT jobject JNICALL Java_cloud_unum_usearch_Index_c_1search_1i8_1threshold
+  (JNIEnv *, jclass, jlong, jbyteArray, jlong, jfloat, jboolean);
+
+/*
+ * Class:     cloud_unum_usearch_Index
+ * Method:    c_search_f32_threshold
+ * Signature: (J[FJFZ)Lcloud/unum/usearch/Index$SearchResult;
+ */
+JNIEXPORT jobject JNICALL Java_cloud_unum_usearch_Index_c_1search_1f32_1threshold
+  (JNIEnv *, jclass, jlong, jfloatArray, jlong, jfloat, jboolean);
+
 #ifdef __cplusplus
 }
 #endif

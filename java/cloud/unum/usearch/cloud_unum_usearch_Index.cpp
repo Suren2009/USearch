@@ -978,3 +978,124 @@ JNIEXPORT jboolean JNICALL Java_cloud_unum_usearch_Index_c_1uses_1dynamic_1dispa
     return JNI_FALSE;
 #endif
 }
+
+JNIEXPORT jobject JNICALL Java_cloud_unum_usearch_Index_c_1search_1i8_1threshold(
+    JNIEnv* env, jclass, jlong c_ptr, jbyteArray vector, jlong wanted, jfloat threshold, jboolean exact) {
+
+    jbyte* vector_data = (*env).GetByteArrayElements(vector, 0);
+    jsize vector_length = (*env).GetArrayLength(vector);
+    i8_span_t vector_span =
+        i8_span_t{reinterpret_cast<std::int8_t*>(vector_data), static_cast<std::size_t>(vector_length)};
+
+    using vector_key_t = typename index_dense_t::vector_key_t;
+    using search_result_t = typename index_dense_t::search_result_t;
+
+    search_result_t result =
+        reinterpret_cast<index_dense_t*>(c_ptr)->search(
+            vector_span, static_cast<std::size_t>(wanted), index_dense_t::any_thread(), exact == JNI_TRUE);
+    (*env).ReleaseByteArrayElements(vector, vector_data, 0);
+
+    if (result) {
+        std::size_t found = result.count;
+        std::size_t valid_count = 0;
+        for (std::size_t i = 0; i < found; i++) {
+            if (result[i].distance <= threshold) {
+                valid_count++;
+            }
+        }
+
+        jlongArray keys = (*env).NewLongArray(to_jsize(env, valid_count));
+        jfloatArray distances = (*env).NewFloatArray(to_jsize(env, valid_count));
+        if (keys == NULL || distances == NULL)
+            return NULL;
+
+        jlong* keys_data = (*env).GetLongArrayElements(keys, 0);
+        jfloat* distances_data = (*env).GetFloatArrayElements(distances, 0);
+
+        std::size_t idx = 0;
+        for (std::size_t i = 0; i < found; i++) {
+            auto match = result[i];
+            if (match.distance <= threshold) {
+                keys_data[idx] = match.member.key;
+                distances_data[idx] = match.distance;
+                idx++;
+            }
+        }
+
+        (*env).ReleaseLongArrayElements(keys, keys_data, JNI_COMMIT);
+        (*env).ReleaseFloatArrayElements(distances, distances_data, JNI_COMMIT);
+
+        jclass clazz = env->FindClass("cloud/unum/usearch/Index$SearchResult");
+        if (clazz == NULL) return NULL;
+
+        jmethodID mid = env->GetMethodID(clazz, "<init>", "([J[F)V");
+        if (mid == NULL) return NULL;
+
+        return env->NewObject(clazz, mid, keys, distances);
+    } else {
+        jclass jc = (*env).FindClass("java/lang/Error");
+        if (jc)
+            (*env).ThrowNew(jc, result.error.release());
+        return NULL;
+    }
+}
+
+JNIEXPORT jobject JNICALL Java_cloud_unum_usearch_Index_c_1search_1f32_1threshold(
+    JNIEnv* env, jclass, jlong c_ptr, jfloatArray vector, jlong wanted, jfloat threshold, jboolean exact) {
+
+    jfloat* vector_data = (*env).GetFloatArrayElements(vector, 0);
+    jsize vector_length = (*env).GetArrayLength(vector);
+    f32_span_t vector_span = f32_span_t{vector_data, static_cast<std::size_t>(vector_length)};
+
+    using vector_key_t = typename index_dense_t::vector_key_t;
+    using search_result_t = typename index_dense_t::search_result_t;
+
+    search_result_t result =
+        reinterpret_cast<index_dense_t*>(c_ptr)->search(
+            vector_span, static_cast<std::size_t>(wanted), index_dense_t::any_thread(), exact == JNI_TRUE);
+    (*env).ReleaseFloatArrayElements(vector, vector_data, 0);
+
+    if (result) {
+        std::size_t found = result.count;
+        std::size_t valid_count = 0;
+        for (std::size_t i = 0; i < found; i++) {
+            if (result[i].distance <= threshold) {
+                valid_count++;
+            }
+        }
+
+        jlongArray keys = (*env).NewLongArray(to_jsize(env, valid_count));
+        jfloatArray distances = (*env).NewFloatArray(to_jsize(env, valid_count));
+        if (keys == NULL || distances == NULL)
+            return NULL;
+
+        jlong* keys_data = (*env).GetLongArrayElements(keys, 0);
+        jfloat* distances_data = (*env).GetFloatArrayElements(distances, 0);
+
+        std::size_t idx = 0;
+        for (std::size_t i = 0; i < found; i++) {
+            auto match = result[i];
+            if (match.distance <= threshold) {
+                keys_data[idx] = match.member.key;
+                distances_data[idx] = match.distance;
+                idx++;
+            }
+        }
+
+        (*env).ReleaseLongArrayElements(keys, keys_data, JNI_COMMIT);
+        (*env).ReleaseFloatArrayElements(distances, distances_data, JNI_COMMIT);
+
+        jclass clazz = env->FindClass("cloud/unum/usearch/Index$SearchResult");
+        if (clazz == NULL) return NULL;
+
+        jmethodID mid = env->GetMethodID(clazz, "<init>", "([J[F)V");
+        if (mid == NULL) return NULL;
+
+        return env->NewObject(clazz, mid, keys, distances);
+    } else {
+        jclass jc = (*env).FindClass("java/lang/Error");
+        if (jc)
+            (*env).ThrowNew(jc, result.error.release());
+        return NULL;
+    }
+}

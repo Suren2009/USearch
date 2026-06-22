@@ -1,7 +1,9 @@
 # JNI library build configuration for Java bindings
 
 # Find JNI package
-find_package(JNI REQUIRED)
+if (NOT ANDROID)
+    find_package(JNI REQUIRED)
+endif ()
 
 # Define JNI library sources
 set(USEARCH_JNI_SOURCES cloud/unum/usearch/cloud_unum_usearch_Index.cpp)
@@ -13,7 +15,9 @@ add_library(usearch_jni SHARED ${USEARCH_JNI_SOURCES})
 setup_target(usearch_jni)
 
 # Add JNI include directories
-target_include_directories(usearch_jni PRIVATE ${JNI_INCLUDE_DIRS})
+if (NOT ANDROID)
+    target_include_directories(usearch_jni PRIVATE ${JNI_INCLUDE_DIRS})
+endif ()
 
 # Set output name to match expected library name
 set_target_properties(usearch_jni PROPERTIES OUTPUT_NAME "usearch_jni")

@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "usearch-android-wrapper"
 include ":usearch-android"
+include ":app"

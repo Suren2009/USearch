@@ -101,3 +101,8 @@ csharp/packages
 *.out
 *.app
 
+# Android Builds
+android/app/build/
+android/usearch-android/build/
+android/usearch-android/.cxx/
+.cxx/

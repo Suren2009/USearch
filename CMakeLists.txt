@@ -216,6 +216,21 @@ set(USEARCH_HEADER_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRE
 
 # Function to setup target
 function (setup_target TARGET_NAME)
+    # Define sanitizer flags based on platform
+    if (ANDROID)
+        set(USE_SANIT_FLAGS_GNU "")
+        set(USE_SANIT_LINK_GNU "")
+        set(USE_SANIT_FLAGS_CLANG "")
+        set(USE_SANIT_LINK_CLANG "")
+        set(USE_SANIT_LEAK_CLANG "")
+    else ()
+        set(USE_SANIT_FLAGS_GNU "-fsanitize=address;-fsanitize=leak;-fsanitize=alignment;-fsanitize=undefined")
+        set(USE_SANIT_LINK_GNU "-fsanitize=address;-fsanitize=leak;-fsanitize=alignment;-fsanitize=undefined")
+        set(USE_SANIT_FLAGS_CLANG "-fsanitize=address;-fsanitize=alignment;-fsanitize=undefined")
+        set(USE_SANIT_LINK_CLANG "-fsanitize=address;-fsanitize=alignment;-fsanitize=undefined")
+        set(USE_SANIT_LEAK_CLANG "-fsanitize=leak")
+    endif ()
+
     # Compiler-specific options List of all possible compiler IDs:
     # https://cmake.org/cmake/help/latest/variable/CMAKE_LANG_COMPILER_ID.html
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -226,10 +241,7 @@ function (setup_target TARGET_NAME)
                     -g>
                     $<$<CONFIG:DEBUG>:-O0
                     -g
-                    -fsanitize=address
-                    -fsanitize=leak
-                    -fsanitize=alignment
-                    -fsanitize=undefined
+                    ${USE_SANIT_FLAGS_GNU}
                     >
                     -ffast-math
                     -fPIC
@@ -246,10 +258,7 @@ function (setup_target TARGET_NAME)
             ${TARGET_NAME}
             PRIVATE
             $<$<CONFIG:DEBUG>:-g
-            -fsanitize=address
-            -fsanitize=leak
-            -fsanitize=alignment
-            -fsanitize=undefined
+            ${USE_SANIT_LINK_GNU}
             >
             -fPIC
         )
@@ -268,9 +277,7 @@ function (setup_target TARGET_NAME)
                     -g>
                     $<$<CONFIG:DEBUG>:-O0
                     -g
-                    -fsanitize=address
-                    -fsanitize=alignment
-                    -fsanitize=undefined
+                    ${USE_SANIT_FLAGS_CLANG}
                     >
                     -ffast-math
                     -fPIC
@@ -282,9 +289,7 @@ function (setup_target TARGET_NAME)
             ${TARGET_NAME}
             PRIVATE
             $<$<CONFIG:DEBUG>:-g
-            -fsanitize=address
-            -fsanitize=alignment
-            -fsanitize=undefined
+            ${USE_SANIT_LINK_CLANG}
             >
             -fPIC
         )
@@ -294,8 +299,10 @@ function (setup_target TARGET_NAME)
             # It's likely AppleClang Adjust options as needed for AppleClang
         else ()
             # It's likely LLVM Clang
-            target_compile_options(${TARGET_NAME} PRIVATE $<$<CONFIG:DEBUG>:-fsanitize=leak>)
-            target_link_options(${TARGET_NAME} PRIVATE $<$<CONFIG:DEBUG>:-fsanitize=leak>)
+            if (USE_SANIT_LEAK_CLANG STREQUAL "-fsanitize=leak")
+                target_compile_options(${TARGET_NAME} PRIVATE $<$<CONFIG:DEBUG>:-fsanitize=leak>)
+                target_link_options(${TARGET_NAME} PRIVATE $<$<CONFIG:DEBUG>:-fsanitize=leak>)
+            endif ()
         endif ()
 
         if (USEARCH_USE_OPENMP)

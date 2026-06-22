@@ -376,6 +376,22 @@ public class Index implements AutoCloseable {
     }
 
     /**
+     * Searches float query vector based on distance threshold and result limit.
+     *
+     * @param vector query vector
+     * @param count result limit
+     * @param threshold distance threshold
+     * @param exact true for exact (flat) search, false for approximate (HNSW) search
+     * @return SearchResult containing matched keys and distances
+     */
+    public SearchResult search(float vector[], long count, float threshold, boolean exact) {
+        if (c_ptr == 0) {
+            throw new IllegalStateException("Index already closed");
+        }
+        return c_search_f32_threshold(c_ptr, vector, count, threshold, exact);
+    }
+
+    /**
      * Searches using zero-copy FloatBuffer.
      *
      * @param vector query vector as FloatBuffer
@@ -585,6 +601,22 @@ public class Index implements AutoCloseable {
             throw new IllegalStateException("Index already closed");
         }
         return c_search_i8(c_ptr, vector, count);
+    }
+
+    /**
+     * Searches byte query vector based on distance threshold and result limit.
+     *
+     * @param vector query vector
+     * @param count result limit
+     * @param threshold distance threshold
+     * @param exact true for exact (flat) search, false for approximate (HNSW) search
+     * @return SearchResult containing matched keys and distances
+     */
+    public SearchResult search(byte vector[], long count, float threshold, boolean exact) {
+        if (c_ptr == 0) {
+            throw new IllegalStateException("Index already closed");
+        }
+        return c_search_i8_threshold(c_ptr, vector, count, threshold, exact);
     }
 
     /**
@@ -890,6 +922,19 @@ public class Index implements AutoCloseable {
      */
     public static boolean usesDynamicDispatch() {
         return c_uses_dynamic_dispatch();
+    }
+
+    /**
+     * Result of a search query with threshold and limit constraints.
+     */
+    public static class SearchResult {
+        public final long[] keys;
+        public final float[] distances;
+
+        public SearchResult(long[] keys, float[] distances) {
+            this.keys = keys;
+            this.distances = distances;
+        }
     }
 
     /**
@@ -1259,4 +1304,10 @@ public class Index implements AutoCloseable {
 
     private static native int c_search_into_i8_buffer(
             long ptr, java.nio.ByteBuffer query, java.nio.LongBuffer results, long maxCount);
+
+    private static native SearchResult c_search_i8_threshold(
+            long ptr, byte vector[], long count, float threshold, boolean exact);
+
+    private static native SearchResult c_search_f32_threshold(
+            long ptr, float vector[], long count, float threshold, boolean exact);
 }

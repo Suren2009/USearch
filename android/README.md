@@ -65,25 +65,85 @@ android {
 }
 ```
 
-Then use USearch from Java or Kotlin:
+## Java Sample Code
+
+### 1. Basic Vector Index Creation and Insertion
 
 ```java
 import cloud.unum.usearch.Index;
 import cloud.unum.usearch.android.USearchAndroid;
 
+// Load the native JNI library
 USearchAndroid.load();
 
+// Create a Cosine index for 64-dimensional float vectors
 try (Index index = USearchAndroid.newIndexConfig()
         .metric(Index.Metric.COSINE)
         .quantization(Index.Quantization.FLOAT32)
-        .dimensions(3)
-        .capacity(100)
+        .dimensions(64)
+        .capacity(1000)
+        .connectivity(16)
         .build()) {
 
-    index.add(42L, new float[]{0.1f, 0.2f, 0.3f});
-    long[] keys = index.search(new float[]{0.1f, 0.2f, 0.3f}, 10);
+    // Add vectors (accepts float[], double[], or byte[])
+    float[] vector = new float[64];
+    // Fill vector elements...
+    index.add(42L, vector);
 }
 ```
+
+### 2. Search based on Distance Threshold and Limit
+
+You can search for nearest neighbors with a threshold filter. This runs directly via C++ HNSW or Exact (flat) search, discarding elements with distance greater than the threshold:
+
+```java
+float[] queryVec = new float[64];
+long limit = 5;
+float threshold = 1.0f; // maximum distance
+boolean exactSearch = false; // set to true for exact flat search, false for HNSW
+
+Index.SearchResult result = index.search(queryVec, limit, threshold, exactSearch);
+
+if (result != null && result.keys != null) {
+    for (int i = 0; i < result.keys.length; i++) {
+        long key = result.keys[i];
+        float distance = result.distances[i];
+        System.out.println("Match #" + (i+1) + " -> Key: " + key + ", Distance: " + distance);
+    }
+}
+```
+
+### 3. Persistent Save and Load
+
+To avoid keeping the index only in volatile memory, serialize it to the Android app's local internal storage:
+
+```java
+// 1. Save the index to storage
+String indexPath = context.getFilesDir().getAbsolutePath() + "/index.usearch";
+index.save(indexPath);
+
+// 2. Load the index from storage in subsequent app sessions
+Index loadedIndex = Index.loadFromPath(indexPath);
+System.out.println("Loaded index size: " + loadedIndex.size());
+System.out.println("Index dimensions: " + loadedIndex.dimensions());
+System.out.println("Index memory usage: " + loadedIndex.memoryUsage() + " bytes");
+```
+
+### 4. Memory-Mapped Views (Low-RAM Optimization)
+
+To query a large index without loading it entirely into Android process memory (reclaiming pages dynamically from disk to avoid Out-Of-Memory crashes):
+
+```java
+String indexPath = context.getFilesDir().getAbsolutePath() + "/large_index.usearch";
+
+// Creates an immutable, memory-mapped view of the index file
+Index indexView = Index.viewFromPath(indexPath);
+
+// Perform read-only search operations
+Index.SearchResult result = indexView.search(queryVec, limit, threshold, false);
+```
+
+---
 
 ## Manual `jniLibs` integration
 
