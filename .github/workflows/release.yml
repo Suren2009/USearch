@@ -987,7 +987,7 @@ jobs:
           gradle compileJava processResources
 
           # Now organize the pre-built JNI libraries to overwrite the local one
-          mkdir -p build/libs/usearch/shared/{linux-amd64,linux-arm64,windows-amd64,windows-x86,windows-arm64,darwin-amd64,darwin-arm64,android-arm64,android-arm32}
+          mkdir -p build/libs/usearch/shared/{linux-amd64,linux-arm64,windows-amd64,windows-x86,windows-arm64,darwin-amd64,darwin-arm64,android-arm64-v8a,android-armeabi-v7a}
 
           # Linux
           cp usearch-jni-linux-amd64/libusearch_jni.so build/libs/usearch/shared/linux-amd64/libusearch_jni.so || true
@@ -1003,8 +1003,8 @@ jobs:
           cp usearch-jni-macos-arm64/libusearch_jni.dylib build/libs/usearch/shared/darwin-arm64/libusearch_jni.dylib || true
 
           # Android
-          cp usearch-jni-android-arm64/libusearch_jni.so build/libs/usearch/shared/android-arm64/libusearch_jni.so || true
-          cp usearch-jni-android-arm32/libusearch_jni.so build/libs/usearch/shared/android-arm32/libusearch_jni.so || true
+          cp usearch-jni-android-arm64/libusearch_jni.so build/libs/usearch/shared/android-arm64-v8a/libusearch_jni.so || true
+          cp usearch-jni-android-arm32/libusearch_jni.so build/libs/usearch/shared/android-armeabi-v7a/libusearch_jni.so || true
 
           echo "=== JNI libraries organized ==="
           tree build/libs/usearch/shared || find build/libs/usearch/shared -name "libusearch_jni.*" | sort

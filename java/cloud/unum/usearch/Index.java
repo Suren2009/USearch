@@ -1008,14 +1008,35 @@ public class Index implements AutoCloseable {
 
     static {
         try {
+            loadNativeLibrary();
+        } catch (IOException e) {
+            throw new RuntimeException(
+                    "Failed to load USearch native library: " + e.getMessage(), e);
+        }
+    }
+
+    private static void loadNativeLibrary() throws IOException {
+        UnsatisfiedLinkError directLoadError = null;
+
+        try {
             System.loadLibrary("usearch"); // used for tests. This library in classpath only
+            return;
         } catch (UnsatisfiedLinkError e) {
-            try {
-                loadLibraryFromJar();
-            } catch (IOException e1) {
-                throw new RuntimeException(
-                        "Failed to load USearch native library: " + e1.getMessage(), e1);
-            }
+            directLoadError = e;
+        }
+
+        try {
+            System.loadLibrary("usearch_jni"); // used by Android AAR/jniLibs packaging
+            return;
+        } catch (UnsatisfiedLinkError e) {
+            directLoadError.addSuppressed(e);
+        }
+
+        try {
+            loadLibraryFromJar();
+        } catch (IOException e) {
+            e.addSuppressed(directLoadError);
+            throw e;
         }
     }
 
@@ -1032,14 +1053,19 @@ public class Index implements AutoCloseable {
             libName = "libusearch_jni.so";
         }
 
-        // Try architecture-specific first, then fall back to generic
-        String[] searchPaths = {
-            "/usearch-native/"
-            + getArchSpecificPath()
-            + "/"
-            + libName, // e.g., /usearch-native/linux-x86_64/libusearch.so
-            "/usearch-native/" + libName // fallback to generic path
-        };
+        String archSpecificPath = getArchSpecificPath();
+        String legacyArchSpecificPath = getLegacyArchSpecificPath();
+
+        // Try architecture-specific first, then fall back to older Android path
+        // names and finally to a generic native library path.
+        String[] searchPaths = archSpecificPath.equals(legacyArchSpecificPath)
+                ? new String[]{
+                    "/usearch-native/" + archSpecificPath + "/" + libName,
+                    "/usearch-native/" + libName}
+                : new String[]{
+                    "/usearch-native/" + archSpecificPath + "/" + libName,
+                    "/usearch-native/" + legacyArchSpecificPath + "/" + libName,
+                    "/usearch-native/" + libName};
 
         IOException lastException = null;
         for (String path : searchPaths) {
@@ -1066,27 +1092,8 @@ public class Index implements AutoCloseable {
         String osName = System.getProperty("os.name").toLowerCase();
         String osArch = System.getProperty("os.arch").toLowerCase();
 
-        // Normalize architecture names
-        String normalizedArch;
-        if (osArch.equals("amd64") || osArch.equals("x86_64")) {
-            normalizedArch = "amd64";
-        } else if (osArch.equals("aarch64") || osArch.equals("arm64")) {
-            normalizedArch = "arm64";
-        } else if (osArch.equals("x86") || osArch.equals("i386")) {
-            normalizedArch = "x86";
-        } else if (osArch.equals("armv7l") || osArch.contains("armv7")) {
-            normalizedArch = "arm32";
-        } else {
-            normalizedArch = osArch;
-        }
-
-        // Detect Android vs regular Linux
-        boolean isAndroid
-                = System.getProperty("java.vendor", "").toLowerCase().contains("android")
-                || System.getProperty("java.vm.name", "").toLowerCase().contains("dalvik")
-                || System.getProperty("java.specification.vendor", "")
-                        .toLowerCase()
-                        .contains("android");
+        String normalizedArch = normalizeArch(osArch);
+        boolean isAndroid = isAndroidRuntime();
 
         // Create platform-specific path
         if (osName.contains("mac") || osName.contains("darwin")) {
@@ -1094,10 +1101,49 @@ public class Index implements AutoCloseable {
         } else if (osName.contains("windows")) {
             return "windows-" + normalizedArch;
         } else if (isAndroid) {
-            return "android-" + normalizedArch;
+            return "android-" + androidAbi(osArch, normalizedArch);
         } else {
             return "linux-" + normalizedArch;
         }
+    }
+
+    private static String getLegacyArchSpecificPath() {
+        if (!isAndroidRuntime()) {
+            return getArchSpecificPath();
+        }
+
+        return "android-" + normalizeArch(System.getProperty("os.arch").toLowerCase());
+    }
+
+    private static String normalizeArch(String osArch) {
+        if (osArch.equals("amd64") || osArch.equals("x86_64")) {
+            return "amd64";
+        } else if (osArch.equals("aarch64") || osArch.equals("arm64") || osArch.equals("arm64-v8a")) {
+            return "arm64";
+        } else if (osArch.equals("x86") || osArch.equals("i386")) {
+            return "x86";
+        } else if (osArch.equals("armeabi-v7a") || osArch.equals("armv7l") || osArch.contains("armv7")) {
+            return "arm32";
+        } else {
+            return osArch;
+        }
+    }
+
+    private static String androidAbi(String osArch, String normalizedArch) {
+        if (normalizedArch.equals("arm64")) {
+            return "arm64-v8a";
+        } else if (normalizedArch.equals("arm32")) {
+            return "armeabi-v7a";
+        }
+        return osArch;
+    }
+
+    private static boolean isAndroidRuntime() {
+        return System.getProperty("java.vendor", "").toLowerCase().contains("android")
+                || System.getProperty("java.vm.name", "").toLowerCase().contains("dalvik")
+                || System.getProperty("java.specification.vendor", "")
+                        .toLowerCase()
+                        .contains("android");
     }
 
     /**

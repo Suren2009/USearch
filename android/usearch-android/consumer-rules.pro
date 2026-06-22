@@ -1,0 +1,2 @@
+-keep class cloud.unum.usearch.** { *; }
+-keep class cloud.unum.usearch.android.** { *; }
