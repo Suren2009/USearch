@@ -26,12 +26,21 @@ The generated AAR will be at:
 usearch-android/build/outputs/aar/usearch-android-release.aar
 ```
 
+A copy is also published to the repo `release/` folder for distribution:
+
+```text
+../release/usearch-android-release.aar
+```
+
 The module is restricted to the `arm64-v8a` ABI through `abiFilters`, so the AAR
 contains:
 
 ```text
 jni/arm64-v8a/libusearch_jni.so
+jni/arm64-v8a/libnumkong.so
 ```
+
+`libnumkong.so` is the NumKong vector/SIMD backend linked by the JNI library.
 
 ## Use the AAR in an Android app
 
@@ -161,17 +170,16 @@ cmake -B build_android_arm64 \
   -DUSEARCH_BUILD_TEST_CPP=OFF \
   -DUSEARCH_BUILD_BENCH_CPP=OFF \
   -DUSEARCH_BUILD_LIB_C=OFF \
-  -DUSEARCH_USE_NUMKONG=ON \
-  -DNK_TARGET_NEON=ON \
-  -DNK_TARGET_NEONBFDOT=ON \
-  -DNK_TARGET_NEONHALF=ON \
-  -DNK_TARGET_NEONSDOT=ON \
-  -DNK_DYNAMIC_DISPATCH=ON
+  -DUSEARCH_USE_NUMKONG=ON
 
 cmake --build build_android_arm64 --config Release
 mkdir -p app/src/main/jniLibs/arm64-v8a
 cp build_android_arm64/libusearch_jni.so app/src/main/jniLibs/arm64-v8a/
+cp build_android_arm64/libnumkong.so app/src/main/jniLibs/arm64-v8a/
 ```
+
+NumKong enables ARM NEON (and related) kernels through compiler ISA probes when
+cross-compiling with the NDK.
 
 Include the Java binding sources or the USearch Java JAR in the app, then call
 `USearchAndroid.load()` or let `Index` load `libusearch_jni.so` automatically.

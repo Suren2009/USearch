@@ -6,9 +6,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Android entry point for the USearch JNI binding.
  *
- * <p>The Android AAR packages {@code libusearch_jni.so} under an ABI-specific
- * {@code jni/} directory. Calling {@link #load()} explicitly makes failures easier
- * to diagnose before constructing an {@link Index}.
+ * <p>The Android AAR packages {@code libusearch_jni.so} and NumKong's
+ * {@code libnumkong.so} under an ABI-specific {@code jni/} directory. Calling
+ * {@link #load()} explicitly makes failures easier to diagnose before constructing
+ * an {@link Index}.
  */
 public final class USearchAndroid {
 
@@ -22,13 +23,18 @@ public final class USearchAndroid {
      */
     public static final String LIBRARY_NAME = "usearch_jni";
 
+    /**
+     * NumKong vector/SIMD backend packaged alongside the JNI library.
+     */
+    public static final String VECTOR_LIBRARY_NAME = "numkong";
+
     private static final AtomicBoolean loaded = new AtomicBoolean(false);
 
     private USearchAndroid() {
     }
 
     /**
-     * Loads the packaged JNI library from the Android app or AAR.
+     * Loads NumKong then the packaged JNI library from the Android app or AAR.
      */
     public static void load() {
         if (!loaded.compareAndSet(false, true)) {
@@ -36,6 +42,8 @@ public final class USearchAndroid {
         }
 
         try {
+            // Load the vector backend first so libusearch_jni.so can resolve it.
+            System.loadLibrary(VECTOR_LIBRARY_NAME);
             System.loadLibrary(LIBRARY_NAME);
         } catch (RuntimeException | Error e) {
             loaded.set(false);

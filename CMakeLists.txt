@@ -419,7 +419,9 @@ if (USEARCH_USE_NUMKONG)
 
         # Windows has no RPATH equivalent, so the dynamic loader only finds
         # NumKong reliably when it sits next to the binaries that link it.
-        if (WIN32)
+        # On Android, place libnumkong.so next to libusearch_jni.so so AGP
+        # packages both into the AAR/APK jni/ ABI folder.
+        if (WIN32 OR ANDROID)
             set_target_properties(
                 nk_shared
                 PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
@@ -427,6 +429,11 @@ if (USEARCH_USE_NUMKONG)
                            RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}"
                            RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}"
                            RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}"
+                           LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+                           LIBRARY_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}"
+                           LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}"
+                           LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}"
+                           LIBRARY_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}"
             )
         endif ()
     endif ()

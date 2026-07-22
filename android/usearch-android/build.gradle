@@ -5,6 +5,7 @@ plugins {
 android {
     namespace "cloud.unum.usearch.android"
     compileSdk 37
+    ndkVersion "27.2.12479018"
 
     defaultConfig {
         minSdk 23
@@ -15,6 +16,9 @@ android {
 
         externalNativeBuild {
             cmake {
+                // Build JNI plus NumKong (vector/SIMD library) so both land in the AAR.
+                // NumKong enables NEON/SVE targets via its own compiler probes.
+                targets "usearch_jni", "nk_shared"
                 arguments "-DUSEARCH_BUILD_JNI=ON",
                         "-DUSEARCH_BUILD_TEST_CPP=OFF",
                         "-DUSEARCH_BUILD_BENCH_CPP=OFF",
@@ -22,11 +26,6 @@ android {
                         "-DUSEARCH_USE_OPENMP=OFF",
                         "-DUSEARCH_USE_JEMALLOC=OFF",
                         "-DUSEARCH_USE_NUMKONG=ON",
-                        "-DNK_TARGET_NEON=ON",
-                        "-DNK_TARGET_NEONBFDOT=ON",
-                        "-DNK_TARGET_NEONHALF=ON",
-                        "-DNK_TARGET_NEONSDOT=ON",
-                        "-DNK_DYNAMIC_DISPATCH=ON",
                         "-DCMAKE_ANDROID_STL_TYPE=c++_static"
                 cppFlags "-std=c++17", "-fexceptions", "-frtti"
             }

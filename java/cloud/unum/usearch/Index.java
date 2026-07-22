@@ -1071,6 +1071,13 @@ public class Index implements AutoCloseable {
         }
 
         try {
+            // NumKong is packaged next to the JNI lib in the Android AAR.
+            // Load it first when present so the linker can resolve DT_NEEDED.
+            try {
+                System.loadLibrary("numkong");
+            } catch (UnsatisfiedLinkError ignored) {
+                // Desktop builds may embed metrics differently or omit NumKong.
+            }
             System.loadLibrary("usearch_jni"); // used by Android AAR/jniLibs packaging
             return;
         } catch (UnsatisfiedLinkError e) {

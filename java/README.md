@@ -45,7 +45,8 @@ dependencies {
 ## Android `arm64-v8a` Integration
 
 Android apps can consume the AAR wrapper in [`../android`](../android). It
-packages the same JNI binding as `jni/arm64-v8a/libusearch_jni.so` and exposes a
+packages the JNI binding as `jni/arm64-v8a/libusearch_jni.so` plus NumKong's
+vector backend as `jni/arm64-v8a/libnumkong.so`, and exposes a
 small `USearchAndroid` loader helper:
 
 ```java

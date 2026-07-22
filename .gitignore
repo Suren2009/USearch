@@ -102,7 +102,9 @@ csharp/packages
 *.app
 
 # Android Builds
+android/build/
 android/app/build/
 android/usearch-android/build/
 android/usearch-android/.cxx/
+android/local.properties
 .cxx/
