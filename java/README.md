@@ -42,6 +42,41 @@ dependencies {
 }
 ```
 
+## Android `arm64-v8a` Integration
+
+Android apps can consume the AAR wrapper in [`../android`](../android). It
+packages the JNI binding as `jni/arm64-v8a/libusearch_jni.so` plus NumKong's
+vector backend as `jni/arm64-v8a/libnumkong.so`, and exposes a
+small `USearchAndroid` loader helper:
+
+```java
+import cloud.unum.usearch.Index;
+import cloud.unum.usearch.android.USearchAndroid;
+
+USearchAndroid.load();
+
+try (Index index = USearchAndroid.newIndexConfig()
+        .metric(Index.Metric.COSINE)
+        .quantization(Index.Quantization.FLOAT32)
+        .dimensions(3)
+        .capacity(100)
+        .build()) {
+    index.add(42L, new float[]{0.1f, 0.2f, 0.3f});
+    long[] keys = index.search(new float[]{0.1f, 0.2f, 0.3f}, 10);
+}
+```
+
+Build it with:
+
+```sh
+cd android
+gradle :usearch-android:assembleRelease
+```
+
+Then add `usearch-android-release.aar` to your app and keep the app ABI filter
+on `arm64-v8a`. See [`../android/README.md`](../android/README.md) for complete
+Gradle and manual `jniLibs` instructions.
+
 ## Quickstart
 
 ```java

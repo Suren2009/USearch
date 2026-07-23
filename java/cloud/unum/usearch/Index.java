@@ -376,6 +376,22 @@ public class Index implements AutoCloseable {
     }
 
     /**
+     * Searches float query vector based on distance threshold and result limit.
+     *
+     * @param vector query vector
+     * @param count result limit
+     * @param threshold distance threshold
+     * @param exact true for exact (flat) search, false for approximate (HNSW) search
+     * @return SearchResult containing matched keys and distances
+     */
+    public SearchResult search(float vector[], long count, float threshold, boolean exact) {
+        if (c_ptr == 0) {
+            throw new IllegalStateException("Index already closed");
+        }
+        return c_search_f32_threshold(c_ptr, vector, count, threshold, exact);
+    }
+
+    /**
      * Searches using zero-copy FloatBuffer.
      *
      * @param vector query vector as FloatBuffer
@@ -585,6 +601,22 @@ public class Index implements AutoCloseable {
             throw new IllegalStateException("Index already closed");
         }
         return c_search_i8(c_ptr, vector, count);
+    }
+
+    /**
+     * Searches byte query vector based on distance threshold and result limit.
+     *
+     * @param vector query vector
+     * @param count result limit
+     * @param threshold distance threshold
+     * @param exact true for exact (flat) search, false for approximate (HNSW) search
+     * @return SearchResult containing matched keys and distances
+     */
+    public SearchResult search(byte vector[], long count, float threshold, boolean exact) {
+        if (c_ptr == 0) {
+            throw new IllegalStateException("Index already closed");
+        }
+        return c_search_i8_threshold(c_ptr, vector, count, threshold, exact);
     }
 
     /**
@@ -893,6 +925,19 @@ public class Index implements AutoCloseable {
     }
 
     /**
+     * Result of a search query with threshold and limit constraints.
+     */
+    public static class SearchResult {
+        public final long[] keys;
+        public final float[] distances;
+
+        public SearchResult(long[] keys, float[] distances) {
+            this.keys = keys;
+            this.distances = distances;
+        }
+    }
+
+    /**
      * Builder for configuring Index instances. Uses builder pattern - call
      * {@link #build()} to create Index.
      */
@@ -1008,14 +1053,42 @@ public class Index implements AutoCloseable {
 
     static {
         try {
+            loadNativeLibrary();
+        } catch (IOException e) {
+            throw new RuntimeException(
+                    "Failed to load USearch native library: " + e.getMessage(), e);
+        }
+    }
+
+    private static void loadNativeLibrary() throws IOException {
+        UnsatisfiedLinkError directLoadError = null;
+
+        try {
             System.loadLibrary("usearch"); // used for tests. This library in classpath only
+            return;
         } catch (UnsatisfiedLinkError e) {
+            directLoadError = e;
+        }
+
+        try {
+            // NumKong is packaged next to the JNI lib in the Android AAR.
+            // Load it first when present so the linker can resolve DT_NEEDED.
             try {
-                loadLibraryFromJar();
-            } catch (IOException e1) {
-                throw new RuntimeException(
-                        "Failed to load USearch native library: " + e1.getMessage(), e1);
+                System.loadLibrary("numkong");
+            } catch (UnsatisfiedLinkError ignored) {
+                // Desktop builds may embed metrics differently or omit NumKong.
             }
+            System.loadLibrary("usearch_jni"); // used by Android AAR/jniLibs packaging
+            return;
+        } catch (UnsatisfiedLinkError e) {
+            directLoadError.addSuppressed(e);
+        }
+
+        try {
+            loadLibraryFromJar();
+        } catch (IOException e) {
+            e.addSuppressed(directLoadError);
+            throw e;
         }
     }
 
@@ -1032,14 +1105,19 @@ public class Index implements AutoCloseable {
             libName = "libusearch_jni.so";
         }
 
-        // Try architecture-specific first, then fall back to generic
-        String[] searchPaths = {
-            "/usearch-native/"
-            + getArchSpecificPath()
-            + "/"
-            + libName, // e.g., /usearch-native/linux-x86_64/libusearch.so
-            "/usearch-native/" + libName // fallback to generic path
-        };
+        String archSpecificPath = getArchSpecificPath();
+        String legacyArchSpecificPath = getLegacyArchSpecificPath();
+
+        // Try architecture-specific first, then fall back to older Android path
+        // names and finally to a generic native library path.
+        String[] searchPaths = archSpecificPath.equals(legacyArchSpecificPath)
+                ? new String[]{
+                    "/usearch-native/" + archSpecificPath + "/" + libName,
+                    "/usearch-native/" + libName}
+                : new String[]{
+                    "/usearch-native/" + archSpecificPath + "/" + libName,
+                    "/usearch-native/" + legacyArchSpecificPath + "/" + libName,
+                    "/usearch-native/" + libName};
 
         IOException lastException = null;
         for (String path : searchPaths) {
@@ -1066,27 +1144,8 @@ public class Index implements AutoCloseable {
         String osName = System.getProperty("os.name").toLowerCase();
         String osArch = System.getProperty("os.arch").toLowerCase();
 
-        // Normalize architecture names
-        String normalizedArch;
-        if (osArch.equals("amd64") || osArch.equals("x86_64")) {
-            normalizedArch = "amd64";
-        } else if (osArch.equals("aarch64") || osArch.equals("arm64")) {
-            normalizedArch = "arm64";
-        } else if (osArch.equals("x86") || osArch.equals("i386")) {
-            normalizedArch = "x86";
-        } else if (osArch.equals("armv7l") || osArch.contains("armv7")) {
-            normalizedArch = "arm32";
-        } else {
-            normalizedArch = osArch;
-        }
-
-        // Detect Android vs regular Linux
-        boolean isAndroid
-                = System.getProperty("java.vendor", "").toLowerCase().contains("android")
-                || System.getProperty("java.vm.name", "").toLowerCase().contains("dalvik")
-                || System.getProperty("java.specification.vendor", "")
-                        .toLowerCase()
-                        .contains("android");
+        String normalizedArch = normalizeArch(osArch);
+        boolean isAndroid = isAndroidRuntime();
 
         // Create platform-specific path
         if (osName.contains("mac") || osName.contains("darwin")) {
@@ -1094,10 +1153,49 @@ public class Index implements AutoCloseable {
         } else if (osName.contains("windows")) {
             return "windows-" + normalizedArch;
         } else if (isAndroid) {
-            return "android-" + normalizedArch;
+            return "android-" + androidAbi(osArch, normalizedArch);
         } else {
             return "linux-" + normalizedArch;
         }
+    }
+
+    private static String getLegacyArchSpecificPath() {
+        if (!isAndroidRuntime()) {
+            return getArchSpecificPath();
+        }
+
+        return "android-" + normalizeArch(System.getProperty("os.arch").toLowerCase());
+    }
+
+    private static String normalizeArch(String osArch) {
+        if (osArch.equals("amd64") || osArch.equals("x86_64")) {
+            return "amd64";
+        } else if (osArch.equals("aarch64") || osArch.equals("arm64") || osArch.equals("arm64-v8a")) {
+            return "arm64";
+        } else if (osArch.equals("x86") || osArch.equals("i386")) {
+            return "x86";
+        } else if (osArch.equals("armeabi-v7a") || osArch.equals("armv7l") || osArch.contains("armv7")) {
+            return "arm32";
+        } else {
+            return osArch;
+        }
+    }
+
+    private static String androidAbi(String osArch, String normalizedArch) {
+        if (normalizedArch.equals("arm64")) {
+            return "arm64-v8a";
+        } else if (normalizedArch.equals("arm32")) {
+            return "armeabi-v7a";
+        }
+        return osArch;
+    }
+
+    private static boolean isAndroidRuntime() {
+        return System.getProperty("java.vendor", "").toLowerCase().contains("android")
+                || System.getProperty("java.vm.name", "").toLowerCase().contains("dalvik")
+                || System.getProperty("java.specification.vendor", "")
+                        .toLowerCase()
+                        .contains("android");
     }
 
     /**
@@ -1213,4 +1311,10 @@ public class Index implements AutoCloseable {
 
     private static native int c_search_into_i8_buffer(
             long ptr, java.nio.ByteBuffer query, java.nio.LongBuffer results, long maxCount);
+
+    private static native SearchResult c_search_i8_threshold(
+            long ptr, byte vector[], long count, float threshold, boolean exact);
+
+    private static native SearchResult c_search_f32_threshold(
+            long ptr, float vector[], long count, float threshold, boolean exact);
 }
