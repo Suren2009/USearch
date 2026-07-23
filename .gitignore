@@ -108,3 +108,15 @@ android/usearch-android/build/
 android/usearch-android/.cxx/
 android/local.properties
 .cxx/
+
+# Android KPI benchmark datasets (large binaries) & debug artifacts
+android/app/benchmark-data/*.fbin
+android/app/benchmark-data/*.hdf5
+android/app/benchmark-data/*.hdf5.bz2
+android/app/benchmark-data/*.bz2
+android/app/benchmark-data/*.class
+android/*.log
+android/*.png
+android/ui-*.xml
+android/kpi-logcat.txt
+android/usearch-device-kpi.txt

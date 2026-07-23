@@ -35,4 +35,6 @@ dependencies {
     implementation project(":usearch-android")
     implementation "androidx.appcompat:appcompat:1.6.1"
     implementation "com.google.android.material:material:1.9.0"
+    implementation "org.apache.commons:commons-compress:1.28.0"
+    implementation "io.jhdf:jhdf:0.10.0"
 }
