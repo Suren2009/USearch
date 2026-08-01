@@ -255,6 +255,31 @@ public class IndexTest {
     }
 
     @Test
+    public void testMemoryCapViewSearchesThroughStoredVectorCache() throws IOException {
+        File indexFile = File.createTempFile("capped-view", "uidx");
+        int dimensions = 3;
+        float[] vectors = new float[]{
+            1.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 1.0f,
+            1.0f, 1.0f, 0.0f
+        };
+
+        try (Index index = new Index.Config().metric("cos").dimensions(dimensions).build()) {
+            index.reserve(4);
+            index.add(10, vectors);
+            index.save(indexFile.getAbsolutePath());
+        }
+
+        try (Index view = Index.viewFromPath(indexFile.getAbsolutePath(), 2L * dimensions * Float.BYTES)) {
+            for (int row = 0; row < 4; row++) {
+                float[] query = Arrays.copyOfRange(vectors, row * dimensions, (row + 1) * dimensions);
+                assertEquals(10 + row, view.search(query, 1)[0]);
+            }
+        }
+    }
+
+    @Test
     public void testHardwareAccelerationAPIs() {
         try (Index index
                 = new Index.Config().metric("cos").quantization("f32").dimensions(10).build()) {
