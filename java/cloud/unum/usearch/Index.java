@@ -72,6 +72,7 @@
 package cloud.unum.usearch;
 
 import java.io.IOException;
+import java.util.Arrays;
 
 public class Index implements AutoCloseable {
 
@@ -176,6 +177,7 @@ public class Index implements AutoCloseable {
     }
 
     private long c_ptr = 0;
+    private long memoryCapBytes = 0;
 
     /**
      * Creates a new instance of Index with specified parameters.
@@ -196,6 +198,32 @@ public class Index implements AutoCloseable {
             long connectivity,
             long expansion_add,
             long expansion_search) {
+        this(metric, quantization, dimensions, capacity, connectivity, expansion_add, expansion_search, 0);
+    }
+
+    /**
+     * Creates a new instance of Index with specified parameters and an optional
+     * JNI working-buffer cap.
+     *
+     * @param metric distance metric for vector similarity calculation
+     * @param quantization scalar quantization type for vector storage
+     * @param dimensions number of vector dimensions
+     * @param capacity initial index capacity
+     * @param connectivity max connections per node in graph
+     * @param expansion_add search width during vector insertion
+     * @param expansion_search search width during queries
+     * @param memoryCapBytes maximum bytes the Java binding may stage for one
+     *                       add/search call, or 0 for unlimited
+     */
+    public Index(
+            String metric,
+            String quantization,
+            long dimensions,
+            long capacity,
+            long connectivity,
+            long expansion_add,
+            long expansion_search,
+            long memoryCapBytes) {
         this(
                 c_create(
                         metric,
@@ -204,11 +232,17 @@ public class Index implements AutoCloseable {
                         capacity,
                         connectivity,
                         expansion_add,
-                        expansion_search));
+                        expansion_search),
+                memoryCapBytes);
     }
 
     private Index(long c_ptr) {
+        this(c_ptr, 0);
+    }
+
+    private Index(long c_ptr, long memoryCapBytes) {
         this.c_ptr = c_ptr;
+        setMemoryCapBytes(memoryCapBytes);
     }
 
     /**
@@ -223,6 +257,20 @@ public class Index implements AutoCloseable {
     }
 
     /**
+     * Loads an index from file into memory and configures the Java binding
+     * working-buffer cap for subsequent add/search calls.
+     *
+     * @param path file path to load from
+     * @param memoryCapBytes maximum bytes staged by one add/search call, or 0
+     *                       for unlimited
+     * @return mutable Index instance
+     * @throws Error if loading fails
+     */
+    public static Index loadFromPath(String path, long memoryCapBytes) {
+        return new Index(c_createFromFile(path, false), memoryCapBytes);
+    }
+
+    /**
      * Creates read-only view of index from file.
      *
      * @param path file path to load from
@@ -231,6 +279,20 @@ public class Index implements AutoCloseable {
      */
     public static Index viewFromPath(String path) {
         return new Index(c_createFromFile(path, true));
+    }
+
+    /**
+     * Creates a read-only view of an index from file with a Java binding
+     * working-buffer cap for subsequent search calls.
+     *
+     * @param path file path to load from
+     * @param memoryCapBytes maximum bytes staged by one add/search call, or 0
+     *                       for unlimited
+     * @return immutable Index view
+     * @throws Error if loading fails
+     */
+    public static Index viewFromPath(String path, long memoryCapBytes) {
+        return new Index(c_createFromFile(path, true), memoryCapBytes);
     }
 
     @Override
@@ -291,6 +353,45 @@ public class Index implements AutoCloseable {
     }
 
     /**
+     * Returns the Java binding working-buffer cap in bytes.
+     *
+     * <p>A value of {@code 0} means unlimited. When positive, large batch add
+     * operations are split into row-aligned chunks so JNI never stages more than
+     * this many input bytes for one native call. Single-vector search/add calls
+     * must fit inside the cap.</p>
+     *
+     * @return memory cap in bytes, or 0 for unlimited
+     */
+    public long memoryCapBytes() {
+        return memoryCapBytes;
+    }
+
+    /**
+     * Updates the Java binding working-buffer cap.
+     *
+     * @param memoryCapBytes maximum bytes staged by one add/search call, or 0
+     *                       for unlimited
+     */
+    public void setMemoryCapBytes(long memoryCapBytes) {
+        if (memoryCapBytes < 0) {
+            throw new IllegalArgumentException("Memory cap must be non-negative");
+        }
+        this.memoryCapBytes = memoryCapBytes;
+    }
+
+    /**
+     * Convenience setter using mebibytes.
+     *
+     * @param memoryCapMb maximum staged bytes in MiB, or 0 for unlimited
+     */
+    public void setMemoryCapMb(long memoryCapMb) {
+        if (memoryCapMb < 0) {
+            throw new IllegalArgumentException("Memory cap must be non-negative");
+        }
+        setMemoryCapBytes(memoryCapMb * 1024L * 1024L);
+    }
+
+    /**
      * Reserves memory for incoming vectors.
      *
      * @param capacity desired total capacity
@@ -339,26 +440,48 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
-        c_add_f32(c_ptr, key, vector);
+        int dimensions = checkedDimensions();
+        int rows = checkedBatchRows(vector.length, dimensions);
+        if (rows == 0) {
+            return;
+        }
+
+        int maxRows = cappedRowsPerCall(dimensions, Float.BYTES);
+        if (rows <= maxRows) {
+            c_add_f32(c_ptr, key, vector);
+            return;
+        }
+
+        for (int row = 0; row < rows; row += maxRows) {
+            int rowsThisCall = Math.min(maxRows, rows - row);
+            int from = row * dimensions;
+            int to = from + rowsThisCall * dimensions;
+            c_add_f32(c_ptr, key + row, Arrays.copyOfRange(vector, from, to));
+        }
     }
 
     /**
-     * Adds vector using zero-copy FloatBuffer.
+     * Adds one or more vectors using a zero-copy FloatBuffer.
      *
-     * @param key vector identifier
-     * @param vector vector data as FloatBuffer
+     * @param key first vector identifier
+     * @param vector row-major vector data as FloatBuffer
      */
     public void add(long key, java.nio.FloatBuffer vector) {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
-        if (vector.remaining() != dimensions()) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Vector dimensions mismatch: expected %d but got %d",
-                            dimensions(), vector.remaining()));
+        int dimensions = checkedDimensions();
+        int rows = checkedBatchRows(vector.remaining(), dimensions);
+        if (rows == 0) {
+            return;
         }
-        c_add_f32_buffer(c_ptr, key, vector);
+
+        int maxRows = cappedRowsPerCall(dimensions, Float.BYTES);
+        java.nio.FloatBuffer source = vector.slice();
+        for (int row = 0; row < rows; row += maxRows) {
+            int rowsThisCall = Math.min(maxRows, rows - row);
+            c_add_f32_buffer(c_ptr, key + row, slice(source, row * dimensions, rowsThisCall * dimensions));
+        }
     }
 
     /**
@@ -372,6 +495,7 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
+        checkedSingleVector(vector.length, checkedDimensions(), Float.BYTES);
         return c_search_f32(c_ptr, vector, count);
     }
 
@@ -388,6 +512,7 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
+        checkedSingleVector(vector.length, checkedDimensions(), Float.BYTES);
         return c_search_f32_threshold(c_ptr, vector, count, threshold, exact);
     }
 
@@ -402,13 +527,8 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
-        if (vector.remaining() != dimensions()) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Vector dimensions mismatch: expected %d but got %d",
-                            dimensions(), vector.remaining()));
-        }
-        return c_search_f32_buffer(c_ptr, vector, count);
+        checkedSingleVector(vector.remaining(), checkedDimensions(), Float.BYTES);
+        return c_search_f32_buffer(c_ptr, vector.slice(), count);
     }
 
     /**
@@ -423,19 +543,21 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
-        if (query.remaining() != dimensions()) {
+        int dimensions = checkedDimensions();
+        if (query.remaining() != dimensions) {
             throw new IllegalArgumentException(
                     String.format(
                             "Query vector dimensions mismatch: expected %d but got %d",
-                            dimensions(), query.remaining()));
+                            dimensions, query.remaining()));
         }
+        ensureFitsMemoryCap(dimensions, Float.BYTES);
         if (results.remaining() < maxCount) {
             throw new IllegalArgumentException(
                     String.format(
                             "Results buffer too small: need %d but only %d remaining",
                             maxCount, results.remaining()));
         }
-        int found = c_search_into_f32_buffer(c_ptr, query, results, maxCount);
+        int found = c_search_into_f32_buffer(c_ptr, query.slice(), results, maxCount);
         // Advance position by the actual number of results, but don't exceed the
         // buffer's remaining capacity
         int currentPosition = results.position();
@@ -468,26 +590,48 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
-        c_add_f64(c_ptr, key, vector);
+        int dimensions = checkedDimensions();
+        int rows = checkedBatchRows(vector.length, dimensions);
+        if (rows == 0) {
+            return;
+        }
+
+        int maxRows = cappedRowsPerCall(dimensions, Double.BYTES);
+        if (rows <= maxRows) {
+            c_add_f64(c_ptr, key, vector);
+            return;
+        }
+
+        for (int row = 0; row < rows; row += maxRows) {
+            int rowsThisCall = Math.min(maxRows, rows - row);
+            int from = row * dimensions;
+            int to = from + rowsThisCall * dimensions;
+            c_add_f64(c_ptr, key + row, Arrays.copyOfRange(vector, from, to));
+        }
     }
 
     /**
-     * Adds double precision vector using zero-copy DoubleBuffer.
+     * Adds one or more double precision vectors using a zero-copy DoubleBuffer.
      *
-     * @param key vector identifier
-     * @param vector vector data as DoubleBuffer
+     * @param key first vector identifier
+     * @param vector row-major vector data as DoubleBuffer
      */
     public void add(long key, java.nio.DoubleBuffer vector) {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
-        if (vector.remaining() != dimensions()) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Vector dimensions mismatch: expected %d but got %d",
-                            dimensions(), vector.remaining()));
+        int dimensions = checkedDimensions();
+        int rows = checkedBatchRows(vector.remaining(), dimensions);
+        if (rows == 0) {
+            return;
         }
-        c_add_f64_buffer(c_ptr, key, vector);
+
+        int maxRows = cappedRowsPerCall(dimensions, Double.BYTES);
+        java.nio.DoubleBuffer source = vector.slice();
+        for (int row = 0; row < rows; row += maxRows) {
+            int rowsThisCall = Math.min(maxRows, rows - row);
+            c_add_f64_buffer(c_ptr, key + row, slice(source, row * dimensions, rowsThisCall * dimensions));
+        }
     }
 
     /**
@@ -501,6 +645,7 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
+        checkedSingleVector(vector.length, checkedDimensions(), Double.BYTES);
         return c_search_f64(c_ptr, vector, count);
     }
 
@@ -515,13 +660,8 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
-        if (vector.remaining() != dimensions()) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Vector dimensions mismatch: expected %d but got %d",
-                            dimensions(), vector.remaining()));
-        }
-        return c_search_f64_buffer(c_ptr, vector, count);
+        checkedSingleVector(vector.remaining(), checkedDimensions(), Double.BYTES);
+        return c_search_f64_buffer(c_ptr, vector.slice(), count);
     }
 
     /**
@@ -536,19 +676,21 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
-        if (query.remaining() != dimensions()) {
+        int dimensions = checkedDimensions();
+        if (query.remaining() != dimensions) {
             throw new IllegalArgumentException(
                     String.format(
                             "Query vector dimensions mismatch: expected %d but got %d",
-                            dimensions(), query.remaining()));
+                            dimensions, query.remaining()));
         }
+        ensureFitsMemoryCap(dimensions, Double.BYTES);
         if (results.remaining() < maxCount) {
             throw new IllegalArgumentException(
                     String.format(
                             "Results buffer too small: need %d but only %d remaining",
                             maxCount, results.remaining()));
         }
-        int found = c_search_into_f64_buffer(c_ptr, query, results, maxCount);
+        int found = c_search_into_f64_buffer(c_ptr, query.slice(), results, maxCount);
         // Advance position by the actual number of results, but don't exceed the
         // buffer's remaining capacity
         int currentPosition = results.position();
@@ -567,26 +709,48 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
-        c_add_i8(c_ptr, key, vector);
+        int dimensions = checkedDimensions();
+        int rows = checkedBatchRows(vector.length, dimensions);
+        if (rows == 0) {
+            return;
+        }
+
+        int maxRows = cappedRowsPerCall(dimensions, Byte.BYTES);
+        if (rows <= maxRows) {
+            c_add_i8(c_ptr, key, vector);
+            return;
+        }
+
+        for (int row = 0; row < rows; row += maxRows) {
+            int rowsThisCall = Math.min(maxRows, rows - row);
+            int from = row * dimensions;
+            int to = from + rowsThisCall * dimensions;
+            c_add_i8(c_ptr, key + row, Arrays.copyOfRange(vector, from, to));
+        }
     }
 
     /**
-     * Adds int8 quantized vector using zero-copy ByteBuffer.
+     * Adds one or more int8 quantized vectors using a zero-copy ByteBuffer.
      *
-     * @param key vector identifier
-     * @param vector vector data as ByteBuffer
+     * @param key first vector identifier
+     * @param vector row-major vector data as ByteBuffer
      */
     public void add(long key, java.nio.ByteBuffer vector) {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
-        if (vector.remaining() != dimensions()) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Vector dimensions mismatch: expected %d but got %d",
-                            dimensions(), vector.remaining()));
+        int dimensions = checkedDimensions();
+        int rows = checkedBatchRows(vector.remaining(), dimensions);
+        if (rows == 0) {
+            return;
         }
-        c_add_i8_buffer(c_ptr, key, vector);
+
+        int maxRows = cappedRowsPerCall(dimensions, Byte.BYTES);
+        java.nio.ByteBuffer source = vector.slice();
+        for (int row = 0; row < rows; row += maxRows) {
+            int rowsThisCall = Math.min(maxRows, rows - row);
+            c_add_i8_buffer(c_ptr, key + row, slice(source, row * dimensions, rowsThisCall * dimensions));
+        }
     }
 
     /**
@@ -600,6 +764,7 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
+        checkedSingleVector(vector.length, checkedDimensions(), Byte.BYTES);
         return c_search_i8(c_ptr, vector, count);
     }
 
@@ -616,6 +781,7 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
+        checkedSingleVector(vector.length, checkedDimensions(), Byte.BYTES);
         return c_search_i8_threshold(c_ptr, vector, count, threshold, exact);
     }
 
@@ -630,13 +796,8 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
-        if (vector.remaining() != dimensions()) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Vector dimensions mismatch: expected %d but got %d",
-                            dimensions(), vector.remaining()));
-        }
-        return c_search_i8_buffer(c_ptr, vector, count);
+        checkedSingleVector(vector.remaining(), checkedDimensions(), Byte.BYTES);
+        return c_search_i8_buffer(c_ptr, vector.slice(), count);
     }
 
     /**
@@ -651,19 +812,21 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
-        if (query.remaining() != dimensions()) {
+        int dimensions = checkedDimensions();
+        if (query.remaining() != dimensions) {
             throw new IllegalArgumentException(
                     String.format(
                             "Query vector dimensions mismatch: expected %d but got %d",
-                            dimensions(), query.remaining()));
+                            dimensions, query.remaining()));
         }
+        ensureFitsMemoryCap(dimensions, Byte.BYTES);
         if (results.remaining() < maxCount) {
             throw new IllegalArgumentException(
                     String.format(
                             "Results buffer too small: need %d but only %d remaining",
                             maxCount, results.remaining()));
         }
-        int found = c_search_into_i8_buffer(c_ptr, query, results, maxCount);
+        int found = c_search_into_i8_buffer(c_ptr, query.slice(), results, maxCount);
         // Advance position by the actual number of results, but don't exceed the
         // buffer's remaining capacity
         int currentPosition = results.position();
@@ -682,7 +845,24 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
-        c_add_u8(c_ptr, key, vector);
+        int dimensions = checkedDimensions();
+        int rows = checkedBatchRows(vector.length, dimensions);
+        if (rows == 0) {
+            return;
+        }
+
+        int maxRows = cappedRowsPerCall(dimensions, Byte.BYTES);
+        if (rows <= maxRows) {
+            c_add_u8(c_ptr, key, vector);
+            return;
+        }
+
+        for (int row = 0; row < rows; row += maxRows) {
+            int rowsThisCall = Math.min(maxRows, rows - row);
+            int from = row * dimensions;
+            int to = from + rowsThisCall * dimensions;
+            c_add_u8(c_ptr, key + row, Arrays.copyOfRange(vector, from, to));
+        }
     }
 
     /**
@@ -696,6 +876,7 @@ public class Index implements AutoCloseable {
         if (c_ptr == 0) {
             throw new IllegalStateException("Index already closed");
         }
+        checkedSingleVector(vector.length, checkedDimensions(), Byte.BYTES);
         return c_search_u8(c_ptr, vector, count);
     }
 
@@ -924,6 +1105,82 @@ public class Index implements AutoCloseable {
         return c_uses_dynamic_dispatch();
     }
 
+    private int checkedDimensions() {
+        long dimensions = dimensions();
+        if (dimensions <= 0 || dimensions > Integer.MAX_VALUE) {
+            throw new IllegalStateException("Unsupported vector dimensions: " + dimensions);
+        }
+        return (int) dimensions;
+    }
+
+    private static int checkedBatchRows(int elements, int dimensions) {
+        if (elements % dimensions != 0) {
+            throw new IllegalArgumentException("Vector length must be a multiple of dimensions");
+        }
+        return elements / dimensions;
+    }
+
+    private void checkedSingleVector(int elements, int dimensions, int bytesPerScalar) {
+        if (elements != dimensions) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Vector dimensions mismatch: expected %d but got %d",
+                            dimensions, elements));
+        }
+        ensureFitsMemoryCap(dimensions, bytesPerScalar);
+    }
+
+    private int cappedRowsPerCall(int dimensions, int bytesPerScalar) {
+        long rowBytes = checkedRowBytes(dimensions, bytesPerScalar);
+        if (memoryCapBytes == 0) {
+            return Math.max(1, Integer.MAX_VALUE / dimensions);
+        }
+        if (memoryCapBytes < rowBytes) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Memory cap %d bytes is smaller than one %d-byte vector row",
+                            memoryCapBytes, rowBytes));
+        }
+        long rowsByCap = memoryCapBytes / rowBytes;
+        long rowsByJavaIndex = Math.max(1L, Integer.MAX_VALUE / dimensions);
+        return (int) Math.max(1L, Math.min(rowsByCap, rowsByJavaIndex));
+    }
+
+    private void ensureFitsMemoryCap(int elements, int bytesPerScalar) {
+        long bytes = checkedRowBytes(elements, bytesPerScalar);
+        if (memoryCapBytes != 0 && bytes > memoryCapBytes) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Operation needs %d bytes, exceeding memory cap of %d bytes",
+                            bytes, memoryCapBytes));
+        }
+    }
+
+    private static long checkedRowBytes(int elements, int bytesPerScalar) {
+        return (long) elements * (long) bytesPerScalar;
+    }
+
+    private static java.nio.FloatBuffer slice(java.nio.FloatBuffer source, int start, int length) {
+        java.nio.FloatBuffer duplicate = source.duplicate();
+        duplicate.position(start);
+        duplicate.limit(start + length);
+        return duplicate.slice();
+    }
+
+    private static java.nio.DoubleBuffer slice(java.nio.DoubleBuffer source, int start, int length) {
+        java.nio.DoubleBuffer duplicate = source.duplicate();
+        duplicate.position(start);
+        duplicate.limit(start + length);
+        return duplicate.slice();
+    }
+
+    private static java.nio.ByteBuffer slice(java.nio.ByteBuffer source, int start, int length) {
+        java.nio.ByteBuffer duplicate = source.duplicate();
+        duplicate.position(start);
+        duplicate.limit(start + length);
+        return duplicate.slice();
+    }
+
     /**
      * Result of a search query with threshold and limit constraints.
      */
@@ -950,6 +1207,7 @@ public class Index implements AutoCloseable {
         private long _connectivity = 0;
         private long _expansion_add = 0;
         private long _expansion_search = 0;
+        private long _memory_cap_bytes = 0;
 
         /**
          * Creates new Config with default settings.
@@ -970,7 +1228,8 @@ public class Index implements AutoCloseable {
                     _capacity,
                     _connectivity,
                     _expansion_add,
-                    _expansion_search);
+                    _expansion_search,
+                    _memory_cap_bytes);
         }
 
         /**
@@ -1048,6 +1307,35 @@ public class Index implements AutoCloseable {
         public Config expansion_search(long _expansion_search) {
             this._expansion_search = _expansion_search;
             return this;
+        }
+
+        /**
+         * Sets the maximum input bytes the Java binding may stage for one
+         * add/search JNI call. Large batch adds are split into row-aligned chunks
+         * under this cap. A value of 0 keeps the legacy unlimited behavior.
+         *
+         * @param _memory_cap_bytes cap in bytes, or 0 for unlimited
+         * @return this Config instance
+         */
+        public Config memoryCapBytes(long _memory_cap_bytes) {
+            if (_memory_cap_bytes < 0) {
+                throw new IllegalArgumentException("Memory cap must be non-negative");
+            }
+            this._memory_cap_bytes = _memory_cap_bytes;
+            return this;
+        }
+
+        /**
+         * Sets the Java binding working-buffer cap in mebibytes.
+         *
+         * @param _memory_cap_mb cap in MiB, or 0 for unlimited
+         * @return this Config instance
+         */
+        public Config memoryCapMb(long _memory_cap_mb) {
+            if (_memory_cap_mb < 0) {
+                throw new IllegalArgumentException("Memory cap must be non-negative");
+            }
+            return memoryCapBytes(_memory_cap_mb * 1024L * 1024L);
         }
     }
 

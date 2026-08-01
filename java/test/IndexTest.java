@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import cloud.unum.usearch.Index;
 import java.io.File;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -174,6 +175,78 @@ public class IndexTest {
             assertTrue(
                     afterAdding > 1000 && afterAdding < 1_000_000_000L,
                     "Memory usage should be reasonable");
+        }
+    }
+
+    @Test
+    public void testMemoryCapChunksFlatArrayAdds() {
+        int dimensions = 3;
+        float[] vectors = new float[]{
+            1.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 1.0f,
+            1.0f, 1.0f, 0.0f,
+            0.0f, 1.0f, 1.0f
+        };
+
+        try (Index index = new Index.Config()
+                .metric("cos")
+                .dimensions(dimensions)
+                .memoryCapBytes(2L * dimensions * Float.BYTES)
+                .build()) {
+            index.reserve(5);
+            index.add(10, vectors);
+
+            assertEquals(5, index.size());
+            assertEquals(2L * dimensions * Float.BYTES, index.memoryCapBytes());
+            for (int row = 0; row < 5; row++) {
+                float[] query = Arrays.copyOfRange(vectors, row * dimensions, (row + 1) * dimensions);
+                assertEquals(10 + row, index.search(query, 1)[0]);
+            }
+        }
+    }
+
+    @Test
+    public void testMemoryCapChunksDirectBufferAdds() {
+        int dimensions = 5;
+        int rows = 5;
+        java.nio.FloatBuffer vectors = java.nio.ByteBuffer
+                .allocateDirect(rows * dimensions * Float.BYTES)
+                .order(java.nio.ByteOrder.nativeOrder())
+                .asFloatBuffer();
+        for (int row = 0; row < rows; row++) {
+            for (int dim = 0; dim < dimensions; dim++) {
+                vectors.put(row * dimensions + dim, row == dim ? 1.0f : 0.0f);
+            }
+        }
+
+        try (Index index = new Index.Config()
+                .metric("cos")
+                .dimensions(dimensions)
+                .memoryCapBytes(2L * dimensions * Float.BYTES)
+                .build()) {
+            index.reserve(rows);
+            index.add(100, vectors);
+
+            assertEquals(rows, index.size());
+            for (int row = 0; row < rows; row++) {
+                java.nio.FloatBuffer query = vectors.duplicate();
+                query.position(row * dimensions);
+                query.limit((row + 1) * dimensions);
+                assertEquals(100 + row, index.search(query.slice(), 1)[0]);
+            }
+        }
+    }
+
+    @Test
+    public void testMemoryCapRejectsSingleVectorTooLarge() {
+        try (Index index = new Index.Config()
+                .metric("cos")
+                .dimensions(8)
+                .memoryCapBytes(8 * Float.BYTES - 1)
+                .build()) {
+            assertThrows(IllegalArgumentException.class, () -> index.add(1, new float[8]));
+            assertThrows(IllegalArgumentException.class, () -> index.search(new float[8], 1));
         }
     }
 

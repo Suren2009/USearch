@@ -174,7 +174,7 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1add_1f32( //
 
     // Handle both single and batch processing uniformly
     if (vector_length % dimensions != 0) {
-        (*env).ReleaseFloatArrayElements(vector, vector_data, 0);
+        (*env).ReleaseFloatArrayElements(vector, vector_data, JNI_ABORT);
         jclass jc = (*env).FindClass("java/lang/IllegalArgumentException");
         if (jc)
             (*env).ThrowNew(jc, "Vector length must be a multiple of dimensions");
@@ -186,14 +186,14 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1add_1f32( //
         f32_span_t vector_span = f32_span_t{vector_data + i * dimensions, dimensions};
         add_result_t result = index->add(static_cast<vector_key_t>(key + i), vector_span);
         if (!result) {
-            (*env).ReleaseFloatArrayElements(vector, vector_data, 0);
+            (*env).ReleaseFloatArrayElements(vector, vector_data, JNI_ABORT);
             jclass jc = (*env).FindClass("java/lang/Error");
             if (jc)
                 (*env).ThrowNew(jc, result.error.release());
             return;
         }
     }
-    (*env).ReleaseFloatArrayElements(vector, vector_data, 0);
+    (*env).ReleaseFloatArrayElements(vector, vector_data, JNI_ABORT);
 }
 
 JNIEXPORT jfloatArray JNICALL Java_cloud_unum_usearch_Index_c_1get(JNIEnv* env, jclass, jlong c_ptr, jlong key) {
@@ -226,7 +226,7 @@ JNIEXPORT jlongArray JNICALL Java_cloud_unum_usearch_Index_c_1search_1f32( //
 
     search_result_t result =
         reinterpret_cast<index_dense_t*>(c_ptr)->search(vector_span, static_cast<std::size_t>(wanted));
-    (*env).ReleaseFloatArrayElements(vector, vector_data, 0);
+    (*env).ReleaseFloatArrayElements(vector, vector_data, JNI_ABORT);
 
     if (result) {
         std::size_t found = result.count;
@@ -307,7 +307,7 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1add_1f64( //
 
     // Handle both single and batch processing uniformly
     if (vector_length % dimensions != 0) {
-        (*env).ReleaseDoubleArrayElements(vector, vector_data, 0);
+        (*env).ReleaseDoubleArrayElements(vector, vector_data, JNI_ABORT);
         jclass jc = (*env).FindClass("java/lang/IllegalArgumentException");
         if (jc)
             (*env).ThrowNew(jc, "Vector length must be a multiple of dimensions");
@@ -319,14 +319,14 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1add_1f64( //
         f64_span_t vector_span = f64_span_t{vector_data + i * dimensions, dimensions};
         add_result_t result = index->add(static_cast<vector_key_t>(key + i), vector_span);
         if (!result) {
-            (*env).ReleaseDoubleArrayElements(vector, vector_data, 0);
+            (*env).ReleaseDoubleArrayElements(vector, vector_data, JNI_ABORT);
             jclass jc = (*env).FindClass("java/lang/Error");
             if (jc)
                 (*env).ThrowNew(jc, result.error.release());
             return;
         }
     }
-    (*env).ReleaseDoubleArrayElements(vector, vector_data, 0);
+    (*env).ReleaseDoubleArrayElements(vector, vector_data, JNI_ABORT);
 }
 
 JNIEXPORT jlongArray JNICALL Java_cloud_unum_usearch_Index_c_1search_1f64( //
@@ -341,7 +341,7 @@ JNIEXPORT jlongArray JNICALL Java_cloud_unum_usearch_Index_c_1search_1f64( //
 
     search_result_t result =
         reinterpret_cast<index_dense_t*>(c_ptr)->search(vector_span, static_cast<std::size_t>(wanted));
-    (*env).ReleaseDoubleArrayElements(vector, vector_data, 0);
+    (*env).ReleaseDoubleArrayElements(vector, vector_data, JNI_ABORT);
 
     if (result) {
         std::size_t found = result.count;
@@ -392,7 +392,7 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1add_1i8( //
 
     // Handle both single and batch processing uniformly
     if (vector_length % dimensions != 0) {
-        (*env).ReleaseByteArrayElements(vector, vector_data, 0);
+        (*env).ReleaseByteArrayElements(vector, vector_data, JNI_ABORT);
         jclass jc = (*env).FindClass("java/lang/IllegalArgumentException");
         if (jc)
             (*env).ThrowNew(jc, "Vector length must be a multiple of dimensions");
@@ -404,14 +404,14 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1add_1i8( //
         i8_span_t vector_span = i8_span_t{reinterpret_cast<std::int8_t*>(vector_data + i * dimensions), dimensions};
         add_result_t result = index->add(static_cast<vector_key_t>(key + i), vector_span);
         if (!result) {
-            (*env).ReleaseByteArrayElements(vector, vector_data, 0);
+            (*env).ReleaseByteArrayElements(vector, vector_data, JNI_ABORT);
             jclass jc = (*env).FindClass("java/lang/Error");
             if (jc)
                 (*env).ThrowNew(jc, result.error.release());
             return;
         }
     }
-    (*env).ReleaseByteArrayElements(vector, vector_data, 0);
+    (*env).ReleaseByteArrayElements(vector, vector_data, JNI_ABORT);
 }
 
 JNIEXPORT jlongArray JNICALL Java_cloud_unum_usearch_Index_c_1search_1i8( //
@@ -427,7 +427,7 @@ JNIEXPORT jlongArray JNICALL Java_cloud_unum_usearch_Index_c_1search_1i8( //
 
     search_result_t result =
         reinterpret_cast<index_dense_t*>(c_ptr)->search(vector_span, static_cast<std::size_t>(wanted));
-    (*env).ReleaseByteArrayElements(vector, vector_data, 0);
+    (*env).ReleaseByteArrayElements(vector, vector_data, JNI_ABORT);
 
     if (result) {
         std::size_t found = result.count;
@@ -477,7 +477,7 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1add_1u8( //
     using add_result_t = typename index_dense_t::add_result_t;
 
     if (vector_length % dimensions != 0) {
-        (*env).ReleaseByteArrayElements(vector, vector_data, 0);
+        (*env).ReleaseByteArrayElements(vector, vector_data, JNI_ABORT);
         jclass jc = (*env).FindClass("java/lang/IllegalArgumentException");
         if (jc)
             (*env).ThrowNew(jc, "Vector length must be a multiple of dimensions");
@@ -489,7 +489,7 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1add_1u8( //
         u8_span_t vector_span = u8_span_t{reinterpret_cast<std::uint8_t*>(vector_data + i * dimensions), dimensions};
         add_result_t result = index->add(static_cast<vector_key_t>(key + i), vector_span);
         if (!result) {
-            (*env).ReleaseByteArrayElements(vector, vector_data, 0);
+            (*env).ReleaseByteArrayElements(vector, vector_data, JNI_ABORT);
             jclass jc = (*env).FindClass("java/lang/Error");
             if (jc)
                 (*env).ThrowNew(jc, result.error.release());
@@ -497,7 +497,7 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1add_1u8( //
         }
     }
 
-    (*env).ReleaseByteArrayElements(vector, vector_data, 0);
+    (*env).ReleaseByteArrayElements(vector, vector_data, JNI_ABORT);
 }
 
 JNIEXPORT jlongArray JNICALL Java_cloud_unum_usearch_Index_c_1search_1u8( //
@@ -513,7 +513,7 @@ JNIEXPORT jlongArray JNICALL Java_cloud_unum_usearch_Index_c_1search_1u8( //
 
     search_result_t result =
         reinterpret_cast<index_dense_t*>(c_ptr)->search(vector_span, static_cast<std::size_t>(wanted));
-    (*env).ReleaseByteArrayElements(vector, vector_data, 0);
+    (*env).ReleaseByteArrayElements(vector, vector_data, JNI_ABORT);
 
     if (result) {
         std::size_t found = result.count;
@@ -564,17 +564,36 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1add_1f32_1buffer( //
 
     auto index = reinterpret_cast<index_dense_t*>(c_ptr);
     size_t dimensions = index->dimensions();
+    jlong capacity = env->GetDirectBufferCapacity(vector_buffer);
+    if (capacity < 0 || capacity % static_cast<jlong>(sizeof(float)) != 0) {
+        jclass jc = env->FindClass("java/lang/IllegalArgumentException");
+        if (jc) {
+            env->ThrowNew(jc, "Invalid FloatBuffer capacity");
+        }
+        return;
+    }
+    jlong vector_dims = capacity / static_cast<jlong>(sizeof(float));
+    if (vector_dims % static_cast<jlong>(dimensions) != 0) {
+        jclass jc = env->FindClass("java/lang/IllegalArgumentException");
+        if (jc) {
+            env->ThrowNew(jc, "Vector length must be a multiple of dimensions");
+        }
+        return;
+    }
+    jlong vectors_count = vector_dims / static_cast<jlong>(dimensions);
 
     using vector_key_t = typename index_dense_t::vector_key_t;
     using add_result_t = typename index_dense_t::add_result_t;
 
-    f32_span_t vector_span = f32_span_t{vector_data, dimensions};
-    add_result_t result = index->add(static_cast<vector_key_t>(key), vector_span);
-
-    if (!result) {
-        jclass jc = env->FindClass("java/lang/Error");
-        if (jc) {
-            env->ThrowNew(jc, result.error.release());
+    for (jlong i = 0; i < vectors_count; i++) {
+        f32_span_t vector_span = f32_span_t{vector_data + i * static_cast<jlong>(dimensions), dimensions};
+        add_result_t result = index->add(static_cast<vector_key_t>(key + i), vector_span);
+        if (!result) {
+            jclass jc = env->FindClass("java/lang/Error");
+            if (jc) {
+                env->ThrowNew(jc, result.error.release());
+            }
+            return;
         }
     }
 }
@@ -593,17 +612,36 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1add_1f64_1buffer( //
 
     auto index = reinterpret_cast<index_dense_t*>(c_ptr);
     size_t dimensions = index->dimensions();
+    jlong capacity = env->GetDirectBufferCapacity(vector_buffer);
+    if (capacity < 0 || capacity % static_cast<jlong>(sizeof(double)) != 0) {
+        jclass jc = env->FindClass("java/lang/IllegalArgumentException");
+        if (jc) {
+            env->ThrowNew(jc, "Invalid DoubleBuffer capacity");
+        }
+        return;
+    }
+    jlong vector_dims = capacity / static_cast<jlong>(sizeof(double));
+    if (vector_dims % static_cast<jlong>(dimensions) != 0) {
+        jclass jc = env->FindClass("java/lang/IllegalArgumentException");
+        if (jc) {
+            env->ThrowNew(jc, "Vector length must be a multiple of dimensions");
+        }
+        return;
+    }
+    jlong vectors_count = vector_dims / static_cast<jlong>(dimensions);
 
     using vector_key_t = typename index_dense_t::vector_key_t;
     using add_result_t = typename index_dense_t::add_result_t;
 
-    f64_span_t vector_span = f64_span_t{vector_data, dimensions};
-    add_result_t result = index->add(static_cast<vector_key_t>(key), vector_span);
-
-    if (!result) {
-        jclass jc = env->FindClass("java/lang/Error");
-        if (jc) {
-            env->ThrowNew(jc, result.error.release());
+    for (jlong i = 0; i < vectors_count; i++) {
+        f64_span_t vector_span = f64_span_t{vector_data + i * static_cast<jlong>(dimensions), dimensions};
+        add_result_t result = index->add(static_cast<vector_key_t>(key + i), vector_span);
+        if (!result) {
+            jclass jc = env->FindClass("java/lang/Error");
+            if (jc) {
+                env->ThrowNew(jc, result.error.release());
+            }
+            return;
         }
     }
 }
@@ -620,30 +658,40 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1add_1i8_1buffer( //
         return;
     }
 
-    jlong capacity = env->GetDirectBufferCapacity(vector_buffer);
-    jlong vector_dims = capacity;
-
     auto index = reinterpret_cast<index_dense_t*>(c_ptr);
     size_t dimensions = index->dimensions();
-
-    if (vector_dims != static_cast<jlong>(dimensions)) {
+    jlong capacity = env->GetDirectBufferCapacity(vector_buffer);
+    if (capacity < 0) {
         jclass jc = env->FindClass("java/lang/IllegalArgumentException");
         if (jc) {
-            env->ThrowNew(jc, "Vector dimensions mismatch");
+            env->ThrowNew(jc, "Invalid ByteBuffer capacity");
         }
         return;
     }
+    jlong vector_dims = capacity;
+
+    if (vector_dims % static_cast<jlong>(dimensions) != 0) {
+        jclass jc = env->FindClass("java/lang/IllegalArgumentException");
+        if (jc) {
+            env->ThrowNew(jc, "Vector length must be a multiple of dimensions");
+        }
+        return;
+    }
+    jlong vectors_count = vector_dims / static_cast<jlong>(dimensions);
 
     using vector_key_t = typename index_dense_t::vector_key_t;
     using add_result_t = typename index_dense_t::add_result_t;
 
-    i8_span_t vector_span = i8_span_t{vector_data, static_cast<std::size_t>(vector_dims)};
-    add_result_t result = index->add(static_cast<vector_key_t>(key), vector_span);
-
-    if (!result) {
-        jclass jc = env->FindClass("java/lang/Error");
-        if (jc) {
-            env->ThrowNew(jc, result.error.release());
+    for (jlong i = 0; i < vectors_count; i++) {
+        i8_span_t vector_span =
+            i8_span_t{vector_data + i * static_cast<jlong>(dimensions), static_cast<std::size_t>(dimensions)};
+        add_result_t result = index->add(static_cast<vector_key_t>(key + i), vector_span);
+        if (!result) {
+            jclass jc = env->FindClass("java/lang/Error");
+            if (jc) {
+                env->ThrowNew(jc, result.error.release());
+            }
+            return;
         }
     }
 }
@@ -829,13 +877,6 @@ JNIEXPORT jint JNICALL Java_cloud_unum_usearch_Index_c_1search_1into_1f32_1buffe
         auto* keys_ptr = reinterpret_cast<vector_key_t*>(results_data);
         result.dump_to(keys_ptr);
 
-        // Advance the LongBuffer position
-        jclass bufferClass = env->GetObjectClass(results_buffer);
-        jmethodID positionMethod = env->GetMethodID(bufferClass, "position", "(I)Ljava/nio/Buffer;");
-        jmethodID getPositionMethod = env->GetMethodID(bufferClass, "position", "()I");
-        jint currentPos = env->CallIntMethod(results_buffer, getPositionMethod);
-        env->CallObjectMethod(results_buffer, positionMethod, currentPos + static_cast<jint>(found));
-
         return static_cast<jint>(found);
     } else {
         jclass jc = env->FindClass("java/lang/Error");
@@ -884,13 +925,6 @@ JNIEXPORT jint JNICALL Java_cloud_unum_usearch_Index_c_1search_1into_1f64_1buffe
         auto* keys_ptr = reinterpret_cast<vector_key_t*>(results_data);
         result.dump_to(keys_ptr);
 
-        // Advance the LongBuffer position
-        jclass bufferClass = env->GetObjectClass(results_buffer);
-        jmethodID positionMethod = env->GetMethodID(bufferClass, "position", "(I)Ljava/nio/Buffer;");
-        jmethodID getPositionMethod = env->GetMethodID(bufferClass, "position", "()I");
-        jint currentPos = env->CallIntMethod(results_buffer, getPositionMethod);
-        env->CallObjectMethod(results_buffer, positionMethod, currentPos + static_cast<jint>(found));
-
         return static_cast<jint>(found);
     } else {
         jclass jc = env->FindClass("java/lang/Error");
@@ -937,13 +971,6 @@ JNIEXPORT jint JNICALL Java_cloud_unum_usearch_Index_c_1search_1into_1i8_1buffer
         // Copy results directly into the LongBuffer
         auto* keys_ptr = reinterpret_cast<vector_key_t*>(results_data);
         result.dump_to(keys_ptr);
-
-        // Advance the LongBuffer position
-        jclass bufferClass = env->GetObjectClass(results_buffer);
-        jmethodID positionMethod = env->GetMethodID(bufferClass, "position", "(I)Ljava/nio/Buffer;");
-        jmethodID getPositionMethod = env->GetMethodID(bufferClass, "position", "()I");
-        jint currentPos = env->CallIntMethod(results_buffer, getPositionMethod);
-        env->CallObjectMethod(results_buffer, positionMethod, currentPos + static_cast<jint>(found));
 
         return static_cast<jint>(found);
     } else {
@@ -993,7 +1020,7 @@ JNIEXPORT jobject JNICALL Java_cloud_unum_usearch_Index_c_1search_1i8_1threshold
     search_result_t result =
         reinterpret_cast<index_dense_t*>(c_ptr)->search(
             vector_span, static_cast<std::size_t>(wanted), index_dense_t::any_thread(), exact == JNI_TRUE);
-    (*env).ReleaseByteArrayElements(vector, vector_data, 0);
+    (*env).ReleaseByteArrayElements(vector, vector_data, JNI_ABORT);
 
     if (result) {
         std::size_t found = result.count;
@@ -1053,7 +1080,7 @@ JNIEXPORT jobject JNICALL Java_cloud_unum_usearch_Index_c_1search_1f32_1threshol
     search_result_t result =
         reinterpret_cast<index_dense_t*>(c_ptr)->search(
             vector_span, static_cast<std::size_t>(wanted), index_dense_t::any_thread(), exact == JNI_TRUE);
-    (*env).ReleaseFloatArrayElements(vector, vector_data, 0);
+    (*env).ReleaseFloatArrayElements(vector, vector_data, JNI_ABORT);
 
     if (result) {
         std::size_t found = result.count;

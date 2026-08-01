@@ -92,6 +92,7 @@ try (Index index = USearchAndroid.newIndexConfig()
         .dimensions(64)
         .capacity(1000)
         .connectivity(16)
+        .memoryCapMb(30)
         .build()) {
 
     // Add vectors (accepts float[], double[], or byte[])
@@ -101,7 +102,34 @@ try (Index index = USearchAndroid.newIndexConfig()
 }
 ```
 
-### 2. Search based on Distance Threshold and Limit
+### 2. Capped Input Buffers for Large Batches
+
+Android clients can cap the Java/JNI input buffer used by heavy add/search
+operations:
+
+```java
+long capBytes = 30L * 1024L * 1024L;
+
+try (Index index = USearchAndroid.newIndexConfig()
+        .metric(Index.Metric.COSINE)
+        .quantization(Index.Quantization.FLOAT32)
+        .dimensions(768)
+        .capacity(100_000)
+        .memoryCapBytes(capBytes)
+        .build()) {
+
+    // Flat arrays and direct buffers may contain many row-major vectors. The
+    // binding splits them into row-aligned native calls that fit under capBytes.
+    index.add(0L, rowMajorFloatBuffer);
+}
+```
+
+For 100k 768D `float32` vectors, the raw input matrix is about 293 MiB. With a
+30 MiB cap, USearch stages at most 10,240 vectors per add call while preserving
+sequential keys. The cap controls transient Java/JNI input buffers, not the total
+index memory needed to store the vectors and graph.
+
+### 3. Search based on Distance Threshold and Limit
 
 You can search for nearest neighbors with a threshold filter. This runs directly via C++ HNSW or Exact (flat) search, discarding elements with distance greater than the threshold:
 
@@ -122,7 +150,7 @@ if (result != null && result.keys != null) {
 }
 ```
 
-### 3. Persistent Save and Load
+### 4. Persistent Save and Load
 
 To avoid keeping the index only in volatile memory, serialize it to the Android app's local internal storage:
 
@@ -138,7 +166,7 @@ System.out.println("Index dimensions: " + loadedIndex.dimensions());
 System.out.println("Index memory usage: " + loadedIndex.memoryUsage() + " bytes");
 ```
 
-### 4. Memory-Mapped Views (Low-RAM Optimization)
+### 5. Memory-Mapped Views (Low-RAM Optimization)
 
 To query a large index without loading it entirely into Android process memory (reclaiming pages dynamically from disk to avoid Out-Of-Memory crashes):
 
@@ -150,6 +178,32 @@ Index indexView = Index.viewFromPath(indexPath);
 
 // Perform read-only search operations
 Index.SearchResult result = indexView.search(queryVec, limit, threshold, false);
+```
+
+## Android KPI Benchmark
+
+The sample app KPI path uses a 30 MiB cap for Cohere 768D `float32` data:
+
+- HDF5-to-FBin conversion reads and writes the source dataset in cap-sized row
+  chunks instead of loading the 100k-row matrix at once.
+- Index construction calls `memoryCapBytes(30L * 1024L * 1024L)` and adds the
+  memory-mapped base matrix in direct-buffer batches.
+- Search uses `searchInto(...)` with a reusable direct `LongBuffer` for result
+  keys.
+
+Launch after placing or downloading `cohere-768-base.fbin` and
+`cohere-768-query.fbin` under the sample app's `datasets/` directory:
+
+```sh
+adb shell am start -n cloud.unum.usearch.demo/.MainActivity --ez run_kpi true
+adb shell run-as cloud.unum.usearch.demo cat files/usearch-device-kpi.txt
+```
+
+The report includes the active cap and capped write batch size, for example:
+
+```text
+memory_cap=30.00 MB for JNI add/search input buffers
+vectors=100000 | cap_batch=10240 rows, index=... s, ... vec/s, add_batch_p99=... ms | search_1k=... s, ... q/s, p50=... ms, p95=... ms, p99=... ms | memory=...
 ```
 
 ---

@@ -32,6 +32,7 @@ import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
+import java.nio.LongBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
@@ -46,6 +47,8 @@ public final class MainActivity extends AppCompatActivity {
     private static final String KPI_LOG_TAG = "USearchKPI";
     private static final int KPI_DIMENSIONS = 768;
     private static final int KPI_QUERY_COUNT = 1_000;
+    private static final int KPI_RESULT_LIMIT = 10;
+    private static final long KPI_MEMORY_CAP_BYTES = 30L * 1024L * 1024L;
     private static final String KPI_BASE_FILE = "cohere-768-base.fbin";
     private static final String KPI_QUERY_FILE = "cohere-768-query.fbin";
     private static final String COHERE_ARCHIVE_URL = "https://dbyiw3u3rf9yr.cloudfront.net/corpora/vectorsearch/cohere-wikipedia-22-12-en-embeddings/documents-1m.hdf5.bz2";
@@ -226,17 +229,27 @@ public final class MainActivity extends AppCompatActivity {
 
     private void convertHdf5ToFbin(File hdf5, File base, File query) throws IOException {
         try (HdfFile file = new HdfFile(hdf5)) {
-            writeFbin((float[][]) file.getDatasetByPath("train").getData(new long[] {0, 0}, new int[] {100_000, KPI_DIMENSIONS}), base);
-            writeFbin((float[][]) file.getDatasetByPath("test").getData(new long[] {0, 0}, new int[] {KPI_QUERY_COUNT, KPI_DIMENSIONS}), query);
+            writeFbin(file.getDatasetByPath("train"), 100_000, base);
+            writeFbin(file.getDatasetByPath("test"), KPI_QUERY_COUNT, query);
         }
     }
 
-    private static void writeFbin(float[][] vectors, File destination) throws IOException {
+    private static void writeFbin(Dataset dataset, int rows, File destination) throws IOException {
         try (FileOutputStream stream = new FileOutputStream(destination)) {
-            ByteBuffer header = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(vectors.length).putInt(KPI_DIMENSIONS);
+            ByteBuffer header = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(rows).putInt(KPI_DIMENSIONS);
             stream.write(header.array());
             ByteBuffer row = ByteBuffer.allocate(KPI_DIMENSIONS * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
-            for (float[] vector : vectors) { row.clear(); row.asFloatBuffer().put(vector, 0, KPI_DIMENSIONS); stream.write(row.array()); }
+            int rowsPerBatch = rowsPerMemoryCap();
+            for (int offset = 0; offset < rows; offset += rowsPerBatch) {
+                int rowsThisBatch = Math.min(rowsPerBatch, rows - offset);
+                float[][] vectors = (float[][]) dataset.getData(
+                        new long[] {offset, 0}, new int[] {rowsThisBatch, KPI_DIMENSIONS});
+                for (float[] vector : vectors) {
+                    row.clear();
+                    row.asFloatBuffer().put(vector, 0, KPI_DIMENSIONS);
+                    stream.write(row.array());
+                }
+            }
         }
     }
 
@@ -354,6 +367,7 @@ public final class MainActivity extends AppCompatActivity {
 
             writeKpi(report, "device=" + android.os.Build.MODEL + ", abi=" + USearchAndroid.ABI);
             writeKpi(report, "dataset=ANN-Benchmarks cohere-768-angular, dtype=f32, metric=cos, dimensions=768");
+            writeKpi(report, "memory_cap=" + formatBytes(KPI_MEMORY_CAP_BYTES) + " for JNI add/search input buffers");
             writeKpi(report, "base=" + baseFile + ", queries=" + queryFile);
             for (int count : new int[] {50_000, 100_000})
                 benchmarkKpiSize(base, queries, count, report);
@@ -377,39 +391,43 @@ public final class MainActivity extends AppCompatActivity {
                     .connectivity(16)
                     .expansion_add(128)
                     .expansion_search(64)
+                    .memoryCapBytes(KPI_MEMORY_CAP_BYTES)
                     .build();
             benchmarkIndex.reserve(count, 1, 1); // Single thread makes per-add latency meaningful.
 
-            float[] vector = new float[KPI_DIMENSIONS];
-            long[] addLatenciesNs = new long[count];
+            int rowsPerBatch = rowsPerMemoryCap();
+            long[] addLatenciesNs = new long[(count + rowsPerBatch - 1) / rowsPerBatch];
             long indexStartNs = SystemClock.elapsedRealtimeNanos();
-            for (int i = 0; i < count; i++) {
-                base.copyRow(i, vector);
+            for (int i = 0, batch = 0; i < count; i += rowsPerBatch, batch++) {
+                int rowsThisBatch = Math.min(rowsPerBatch, count - i);
                 long startNs = SystemClock.elapsedRealtimeNanos();
-                benchmarkIndex.add(i, vector);
-                addLatenciesNs[i] = SystemClock.elapsedRealtimeNanos() - startNs;
+                benchmarkIndex.add(i, base.sliceRows(i, rowsThisBatch));
+                addLatenciesNs[batch] = SystemClock.elapsedRealtimeNanos() - startNs;
             }
             long indexElapsedNs = SystemClock.elapsedRealtimeNanos() - indexStartNs;
 
+            LongBuffer results = ByteBuffer.allocateDirect(KPI_RESULT_LIMIT * Long.BYTES)
+                    .order(ByteOrder.nativeOrder())
+                    .asLongBuffer();
             // Warm up native dispatch and memory paths; warm-up samples are excluded.
             for (int i = 0; i < 100; i++) {
-                queries.copyRow(i, vector);
-                benchmarkIndex.search(vector, 10);
+                results.clear();
+                benchmarkIndex.searchInto(queries.sliceRows(i, 1), results, KPI_RESULT_LIMIT);
             }
             long[] searchLatenciesNs = new long[KPI_QUERY_COUNT];
             long searchStartNs = SystemClock.elapsedRealtimeNanos();
             for (int i = 0; i < KPI_QUERY_COUNT; i++) {
-                queries.copyRow(i, vector);
+                results.clear();
                 long startNs = SystemClock.elapsedRealtimeNanos();
-                benchmarkIndex.search(vector, 10);
+                benchmarkIndex.searchInto(queries.sliceRows(i, 1), results, KPI_RESULT_LIMIT);
                 searchLatenciesNs[i] = SystemClock.elapsedRealtimeNanos() - startNs;
             }
             long searchElapsedNs = SystemClock.elapsedRealtimeNanos() - searchStartNs;
 
             String result = String.format(Locale.US,
-                    "vectors=%d | index=%.3f s, %.0f vec/s, add_p99=%.3f ms | " +
+                    "vectors=%d | cap_batch=%d rows, index=%.3f s, %.0f vec/s, add_batch_p99=%.3f ms | " +
                     "search_1k=%.3f s, %.0f q/s, p50=%.3f ms, p95=%.3f ms, p99=%.3f ms | memory=%s",
-                    count, indexElapsedNs / 1e9, count / (indexElapsedNs / 1e9), percentileMs(addLatenciesNs, 99),
+                    count, rowsPerBatch, indexElapsedNs / 1e9, count / (indexElapsedNs / 1e9), percentileMs(addLatenciesNs, 99),
                     searchElapsedNs / 1e9, KPI_QUERY_COUNT / (searchElapsedNs / 1e9), percentileMs(searchLatenciesNs, 50),
                     percentileMs(searchLatenciesNs, 95), percentileMs(searchLatenciesNs, 99), formatBytes(benchmarkIndex.memoryUsage()));
             writeKpi(report, result);
@@ -466,10 +484,15 @@ public final class MainActivity extends AppCompatActivity {
             }
         }
 
-        void copyRow(int row, float[] target) {
+        FloatBuffer sliceRows(int row, int count) {
             FloatBuffer view = values.duplicate();
             view.position(row * columns);
-            view.get(target, 0, columns);
+            view.limit((row + count) * columns);
+            return view.slice();
+        }
+
+        void copyRow(int row, float[] target) {
+            sliceRows(row, 1).get(target, 0, columns);
         }
 
         @Override public void close() throws IOException { channel.close(); }
@@ -947,6 +970,11 @@ public final class MainActivity extends AppCompatActivity {
         int exp = (int) (Math.log(bytes) / Math.log(1024));
         char pre = "KMGTPE".charAt(exp - 1);
         return String.format(Locale.US, "%.2f %cB", bytes / Math.pow(1024, exp), pre);
+    }
+
+    private static int rowsPerMemoryCap() {
+        long rowBytes = (long) KPI_DIMENSIONS * Float.BYTES;
+        return (int) Math.max(1L, KPI_MEMORY_CAP_BYTES / rowBytes);
     }
 
     @Override

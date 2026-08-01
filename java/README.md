@@ -60,11 +60,20 @@ try (Index index = USearchAndroid.newIndexConfig()
         .quantization(Index.Quantization.FLOAT32)
         .dimensions(3)
         .capacity(100)
+        .memoryCapMb(30)
         .build()) {
     index.add(42L, new float[]{0.1f, 0.2f, 0.3f});
     long[] keys = index.search(new float[]{0.1f, 0.2f, 0.3f}, 10);
 }
 ```
+
+For large Java/Android batches, `memoryCapBytes(...)` / `memoryCapMb(...)`
+limits the JNI input window used by `add(...)` and `search(...)`. For example,
+100k 768D `float32` vectors require about 293 MiB of input data, but with
+`.memoryCapMb(30)` the binding splits flat arrays or direct buffers into
+row-aligned chunks of at most 30 MiB per native call. The cap is not serialized
+with saved indexes; pass it again through `loadFromPath(path, capBytes)`,
+`viewFromPath(path, capBytes)`, or `setMemoryCapBytes(...)`.
 
 Build it with:
 
