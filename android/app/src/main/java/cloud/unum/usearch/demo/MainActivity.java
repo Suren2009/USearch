@@ -367,7 +367,7 @@ public final class MainActivity extends AppCompatActivity {
 
             writeKpi(report, "device=" + android.os.Build.MODEL + ", abi=" + USearchAndroid.ABI);
             writeKpi(report, "dataset=ANN-Benchmarks cohere-768-angular, dtype=f32, metric=cos, dimensions=768");
-            writeKpi(report, "memory_cap=" + formatBytes(KPI_MEMORY_CAP_BYTES) + " for JNI add/search input buffers");
+            writeKpi(report, "memory_cap=" + formatBytes(KPI_MEMORY_CAP_BYTES) + " for native/JNI add/search buffers");
             writeKpi(report, "base=" + baseFile + ", queries=" + queryFile);
             for (int count : new int[] {50_000, 100_000})
                 benchmarkKpiSize(base, queries, count, report);

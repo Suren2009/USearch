@@ -29,13 +29,19 @@ JNIEXPORT jlong JNICALL Java_cloud_unum_usearch_Index_c_1create( //
     JNIEnv* env, jclass,                                         //
     jstring metric, jstring quantization,                        //
     jlong dimensions, jlong capacity, jlong connectivity,        //
-    jlong expansion_add, jlong expansion_search) {
+    jlong expansion_add, jlong expansion_search, jlong memory_cap_bytes) {
 
     jlong result{};
     char const* metric_cstr{};
     char const* quantization_cstr{};
     try {
 
+        if (memory_cap_bytes < 0) {
+            jclass jc = (*env).FindClass("java/lang/IllegalArgumentException");
+            if (jc)
+                (*env).ThrowNew(jc, "Memory cap must be non-negative");
+            goto cleanup;
+        }
         metric_cstr = (*env).GetStringUTFChars(metric, 0);
         std::size_t metric_length = (*env).GetStringUTFLength(metric);
         quantization_cstr = (*env).GetStringUTFChars(quantization, 0);
@@ -44,6 +50,7 @@ JNIEXPORT jlong JNICALL Java_cloud_unum_usearch_Index_c_1create( //
         scalar_kind_t quantization = scalar_kind_from_name(quantization_cstr, quantization_length);
         index_dense_config_t config(static_cast<std::size_t>(connectivity), static_cast<std::size_t>(expansion_add),
                                     static_cast<std::size_t>(expansion_search));
+        config.memory_cap = static_cast<std::size_t>(memory_cap_bytes);
         metric_punned_t metric(static_cast<std::size_t>(dimensions), metric_kind, quantization);
         if (metric.missing()) {
             jclass jc = (*env).FindClass("java/lang/Error");
@@ -74,18 +81,32 @@ cleanup:
     return result;
 }
 
-JNIEXPORT jlong JNICALL Java_cloud_unum_usearch_Index_c_1createFromFile(JNIEnv* env, jclass, jstring path,
-                                                                        jboolean view) {
+JNIEXPORT jlong JNICALL Java_cloud_unum_usearch_Index_c_1createFromFile(JNIEnv* env, jclass, jstring path, jboolean view,
+                                                                        jlong memory_cap_bytes) {
+    if (memory_cap_bytes < 0) {
+        jclass jc = env->FindClass("java/lang/IllegalArgumentException");
+        if (jc)
+            env->ThrowNew(jc, "Memory cap must be non-negative");
+        return 0;
+    }
     char const* path_cstr = env->GetStringUTFChars(path, 0);
-    index_dense_t::state_result_t make_result = index_dense_t::make(path_cstr, view);
+    index_dense_t index;
+    if (!index.try_change_memory_cap(static_cast<std::size_t>(memory_cap_bytes))) {
+        env->ReleaseStringUTFChars(path, path_cstr);
+        jclass jc = env->FindClass("java/lang/Error");
+        if (jc)
+            env->ThrowNew(jc, "Memory cap is smaller than the current native operation buffer");
+        return 0;
+    }
+    serialization_result_t serialization_result = view ? index.view(path_cstr) : index.load(path_cstr);
     env->ReleaseStringUTFChars(path, path_cstr);
-    if (!make_result) {
+    if (!serialization_result) {
         jclass jc = env->FindClass("java/lang/Error");
         if (jc) {
-            env->ThrowNew(jc, make_result.error.release());
+            env->ThrowNew(jc, serialization_result.error.release());
         }
     }
-    index_dense_t* result_ptr = new index_dense_t(std::move(make_result.index));
+    index_dense_t* result_ptr = new index_dense_t(std::move(index));
     jlong result;
     std::memcpy(&result, &result_ptr, sizeof(jlong));
     return result;
@@ -157,6 +178,22 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1reserve(JNIEnv* env, jcl
         jclass jc = (*env).FindClass("java/lang/Error");
         if (jc)
             (*env).ThrowNew(jc, "Failed to grow vector index!");
+    }
+}
+
+JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1change_1memory_1cap(JNIEnv* env, jclass, jlong c_ptr,
+                                                                            jlong memory_cap_bytes) {
+    if (memory_cap_bytes < 0) {
+        jclass jc = (*env).FindClass("java/lang/IllegalArgumentException");
+        if (jc)
+            (*env).ThrowNew(jc, "Memory cap must be non-negative");
+        return;
+    }
+    auto index = reinterpret_cast<index_dense_t*>(c_ptr);
+    if (!index->try_change_memory_cap(static_cast<std::size_t>(memory_cap_bytes))) {
+        jclass jc = (*env).FindClass("java/lang/Error");
+        if (jc)
+            (*env).ThrowNew(jc, "Memory cap is smaller than the current native operation buffer");
     }
 }
 

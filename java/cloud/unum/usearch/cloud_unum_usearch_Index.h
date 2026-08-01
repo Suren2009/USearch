@@ -10,18 +10,18 @@ extern "C" {
 /*
  * Class:     cloud_unum_usearch_Index
  * Method:    c_create
- * Signature: (Ljava/lang/String;Ljava/lang/String;JJJJJ)J
+ * Signature: (Ljava/lang/String;Ljava/lang/String;JJJJJJ)J
  */
 JNIEXPORT jlong JNICALL Java_cloud_unum_usearch_Index_c_1create
-  (JNIEnv *, jclass, jstring, jstring, jlong, jlong, jlong, jlong, jlong);
+  (JNIEnv *, jclass, jstring, jstring, jlong, jlong, jlong, jlong, jlong, jlong);
 
 /*
  * Class:     cloud_unum_usearch_Index
  * Method:    c_createFromFile
- * Signature: (Ljava/lang/String;Z)J
+ * Signature: (Ljava/lang/String;ZJ)J
  */
 JNIEXPORT jlong JNICALL Java_cloud_unum_usearch_Index_c_1createFromFile
-  (JNIEnv *, jclass, jstring, jboolean);
+  (JNIEnv *, jclass, jstring, jboolean, jlong);
 
 /*
  * Class:     cloud_unum_usearch_Index
@@ -70,6 +70,14 @@ JNIEXPORT jlong JNICALL Java_cloud_unum_usearch_Index_c_1capacity
  */
 JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1reserve
   (JNIEnv *, jclass, jlong, jlong, jlong, jlong);
+
+/*
+ * Class:     cloud_unum_usearch_Index
+ * Method:    c_change_memory_cap
+ * Signature: (JJ)V
+ */
+JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1change_1memory_1cap
+  (JNIEnv *, jclass, jlong, jlong);
 
 /*
  * Class:     cloud_unum_usearch_Index

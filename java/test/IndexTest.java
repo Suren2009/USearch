@@ -240,13 +240,17 @@ public class IndexTest {
 
     @Test
     public void testMemoryCapRejectsSingleVectorTooLarge() {
-        try (Index index = new Index.Config()
+        assertThrows(Error.class, () -> new Index.Config()
                 .metric("cos")
                 .dimensions(8)
                 .memoryCapBytes(8 * Float.BYTES - 1)
-                .build()) {
-            assertThrows(IllegalArgumentException.class, () -> index.add(1, new float[8]));
-            assertThrows(IllegalArgumentException.class, () -> index.search(new float[8], 1));
+                .build());
+    }
+
+    @Test
+    public void testMemoryCapRejectsTooSmallRuntimeCap() {
+        try (Index index = new Index.Config().metric("cos").dimensions(8).build()) {
+            assertThrows(Error.class, () -> index.setMemoryCapBytes(8 * Float.BYTES - 1));
         }
     }
 

@@ -137,6 +137,17 @@ struct index_dense_config_t : public index_config_t {
      */
     bool enable_key_lookups = true;
 
+    /**
+     *  @brief  Maximum bytes reserved for transient per-operation cast buffers.
+     *          Zero keeps the legacy unlimited behavior.
+     *
+     *  This configuration parameter doesn't affect the serialized file and is
+     *  not preserved between runs. It bounds the dense wrapper's internal
+     *  `threads * bytes_per_vector()` staging buffer used when add/search inputs
+     *  must be cast into the index scalar type.
+     */
+    std::size_t memory_cap = 0;
+
     inline index_dense_config_t(index_config_t base) noexcept : index_config_t(base) {}
 
     inline index_dense_config_t(std::size_t c = 0, std::size_t ea = 0, std::size_t es = 0) noexcept
@@ -555,6 +566,20 @@ class index_dense_gt {
         }
     };
 
+    bool try_fit_memory_cap_(index_limits_t& limits) const noexcept {
+        if (!config_.memory_cap)
+            return true;
+        std::size_t bytes_per_vector = metric_.bytes_per_vector();
+        if (!bytes_per_vector)
+            return true;
+        std::size_t max_threads = config_.memory_cap / bytes_per_vector;
+        if (!max_threads)
+            return false;
+        limits.threads_add = (std::min)(limits.threads_add, max_threads);
+        limits.threads_search = (std::min)(limits.threads_search, max_threads);
+        return true;
+    }
+
   public:
     using cluster_result_t = typename index_t::cluster_result_t;
     using add_result_t = typename index_t::add_result_t;
@@ -734,6 +759,8 @@ class index_dense_gt {
         checked_size_result_t needed_bytes = checked_mul(limits().threads(), metric.bytes_per_vector());
         if (!needed_bytes)
             return false;
+        if (config_.memory_cap && needed_bytes.value > config_.memory_cap)
+            return false;
         if (needed_bytes.value > cast_buffer_.size()) {
             cast_buffer_t new_buffer(needed_bytes.value);
             if (!new_buffer)
@@ -756,6 +783,25 @@ class index_dense_gt {
     std::size_t bytes_per_vector() const { return metric_.bytes_per_vector(); }
     std::size_t scalar_words() const { return metric_.scalar_words(); }
     std::size_t dimensions() const { return metric_.dimensions(); }
+    std::size_t memory_cap() const { return config_.memory_cap; }
+
+    /**
+     *  @brief  Changes the transient cast-buffer cap.
+     *  @return @c false if the current per-thread buffer already exceeds the
+     *          requested cap.
+     */
+    bool try_change_memory_cap(std::size_t memory_cap) noexcept {
+        if (memory_cap && cast_buffer_.size() > memory_cap)
+            return false;
+        config_.memory_cap = memory_cap;
+        return true;
+    }
+
+    /// @brief Throwing counterpart of @ref try_change_memory_cap.
+    void change_memory_cap(std::size_t memory_cap) {
+        if (!try_change_memory_cap(memory_cap))
+            usearch_raise_runtime_error("memory cap is smaller than the current operation buffer");
+    }
 
     // Fetching and changing search criteria
     std::size_t expansion_add() const { return config_.expansion_add; }
@@ -1050,6 +1096,9 @@ class index_dense_gt {
      */
     bool try_reserve(index_limits_t limits) {
 
+        if (!try_fit_memory_cap_(limits))
+            return false;
+
         // The slot lookup system will generally prefer power-of-two sizes.
         if (config_.enable_key_lookups) {
             unique_lock_t lock(slot_lookup_mutex_);
@@ -1082,6 +1131,8 @@ class index_dense_gt {
         // Allocate a buffer for the casted vectors.
         checked_size_result_t cast_buffer_bytes = checked_mul(limits.threads(), metric_.bytes_per_vector());
         if (!cast_buffer_bytes)
+            return false;
+        if (config_.memory_cap && cast_buffer_bytes.value > config_.memory_cap)
             return false;
         cast_buffer_t cast_buffer(cast_buffer_bytes.value);
         if (!cast_buffer)
@@ -1297,9 +1348,13 @@ class index_dense_gt {
 
             config_.multi = head.multi;
             metric_ = metric_t::builtin(head.dimensions, head.kind_metric, head.kind_scalar);
+            if (!try_fit_memory_cap_(new_limits))
+                return result.failed("Memory cap is smaller than one operation buffer");
             checked_size_result_t cast_buffer_bytes = checked_mul(new_limits.threads(), metric_.bytes_per_vector());
             if (!cast_buffer_bytes)
                 return result.failed("Failed to allocate memory for the casts");
+            if (config_.memory_cap && cast_buffer_bytes.value > config_.memory_cap)
+                return result.failed("Memory cap is smaller than the requested operation buffer");
             cast_buffer_ = cast_buffer_t(cast_buffer_bytes.value);
             if (!cast_buffer_)
                 return result.failed("Failed to allocate memory for the casts");
@@ -1415,9 +1470,13 @@ class index_dense_gt {
             config_.multi = head.multi;
             metric_ = metric_t::builtin(head.dimensions, head.kind_metric, head.kind_scalar);
             // available_threads_.size() will be updated to old_limits.threads() later in this
+            if (!try_fit_memory_cap_(new_limits))
+                return result.failed("Memory cap is smaller than one operation buffer");
             checked_size_result_t cast_buffer_bytes = checked_mul(new_limits.threads(), metric_.bytes_per_vector());
             if (!cast_buffer_bytes)
                 return result.failed("Failed to allocate memory for the casts");
+            if (config_.memory_cap && cast_buffer_bytes.value > config_.memory_cap)
+                return result.failed("Memory cap is smaller than the requested operation buffer");
             cast_buffer_ = cast_buffer_t(cast_buffer_bytes.value);
             if (!cast_buffer_)
                 return result.failed("Failed to allocate memory for the casts");

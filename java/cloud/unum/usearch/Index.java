@@ -232,7 +232,8 @@ public class Index implements AutoCloseable {
                         capacity,
                         connectivity,
                         expansion_add,
-                        expansion_search),
+                        expansion_search,
+                        memoryCapBytes),
                 memoryCapBytes);
     }
 
@@ -253,7 +254,7 @@ public class Index implements AutoCloseable {
      * @throws Error if loading fails
      */
     public static Index loadFromPath(String path) {
-        return new Index(c_createFromFile(path, false));
+        return new Index(c_createFromFile(path, false, 0));
     }
 
     /**
@@ -267,7 +268,7 @@ public class Index implements AutoCloseable {
      * @throws Error if loading fails
      */
     public static Index loadFromPath(String path, long memoryCapBytes) {
-        return new Index(c_createFromFile(path, false), memoryCapBytes);
+        return new Index(c_createFromFile(path, false, memoryCapBytes), memoryCapBytes);
     }
 
     /**
@@ -278,7 +279,7 @@ public class Index implements AutoCloseable {
      * @throws Error if loading fails
      */
     public static Index viewFromPath(String path) {
-        return new Index(c_createFromFile(path, true));
+        return new Index(c_createFromFile(path, true, 0));
     }
 
     /**
@@ -292,7 +293,7 @@ public class Index implements AutoCloseable {
      * @throws Error if loading fails
      */
     public static Index viewFromPath(String path, long memoryCapBytes) {
-        return new Index(c_createFromFile(path, true), memoryCapBytes);
+        return new Index(c_createFromFile(path, true, memoryCapBytes), memoryCapBytes);
     }
 
     @Override
@@ -353,12 +354,12 @@ public class Index implements AutoCloseable {
     }
 
     /**
-     * Returns the Java binding working-buffer cap in bytes.
+     * Returns the Java/native working-buffer cap in bytes.
      *
      * <p>A value of {@code 0} means unlimited. When positive, large batch add
      * operations are split into row-aligned chunks so JNI never stages more than
-     * this many input bytes for one native call. Single-vector search/add calls
-     * must fit inside the cap.</p>
+     * this many input bytes for one native call. The same cap is also passed to
+     * the native dense index to bound its transient per-thread cast buffer.</p>
      *
      * @return memory cap in bytes, or 0 for unlimited
      */
@@ -367,7 +368,7 @@ public class Index implements AutoCloseable {
     }
 
     /**
-     * Updates the Java binding working-buffer cap.
+     * Updates the Java/native working-buffer cap.
      *
      * @param memoryCapBytes maximum bytes staged by one add/search call, or 0
      *                       for unlimited
@@ -375,6 +376,9 @@ public class Index implements AutoCloseable {
     public void setMemoryCapBytes(long memoryCapBytes) {
         if (memoryCapBytes < 0) {
             throw new IllegalArgumentException("Memory cap must be non-negative");
+        }
+        if (c_ptr != 0) {
+            c_change_memory_cap(c_ptr, memoryCapBytes);
         }
         this.memoryCapBytes = memoryCapBytes;
     }
@@ -1505,9 +1509,10 @@ public class Index implements AutoCloseable {
             long capacity,
             long connectivity,
             long expansion_add,
-            long expansion_search);
+            long expansion_search,
+            long memoryCapBytes);
 
-    private static native long c_createFromFile(String path, boolean view);
+    private static native long c_createFromFile(String path, boolean view, long memoryCapBytes);
 
     private static native void c_destroy(long ptr);
 
@@ -1520,6 +1525,8 @@ public class Index implements AutoCloseable {
     private static native long c_capacity(long ptr);
 
     private static native void c_reserve(long ptr, long capacity, long threadsAdd, long threadsSearch);
+
+    private static native void c_change_memory_cap(long ptr, long memoryCapBytes);
 
     private static native void c_save(long ptr, String path);
 

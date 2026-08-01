@@ -105,7 +105,7 @@ try (Index index = USearchAndroid.newIndexConfig()
 ### 2. Capped Input Buffers for Large Batches
 
 Android clients can cap the Java/JNI input buffer used by heavy add/search
-operations:
+operations and the native dense-index operation buffer:
 
 ```java
 long capBytes = 30L * 1024L * 1024L;
@@ -126,8 +126,9 @@ try (Index index = USearchAndroid.newIndexConfig()
 
 For 100k 768D `float32` vectors, the raw input matrix is about 293 MiB. With a
 30 MiB cap, USearch stages at most 10,240 vectors per add call while preserving
-sequential keys. The cap controls transient Java/JNI input buffers, not the total
-index memory needed to store the vectors and graph.
+sequential keys and keeps the native per-thread cast buffer under the same cap.
+The cap controls transient operation buffers, not the total index memory needed
+to store the vectors and graph.
 
 ### 3. Search based on Distance Threshold and Limit
 
@@ -202,7 +203,7 @@ adb shell run-as cloud.unum.usearch.demo cat files/usearch-device-kpi.txt
 The report includes the active cap and capped write batch size, for example:
 
 ```text
-memory_cap=30.00 MB for JNI add/search input buffers
+memory_cap=30.00 MB for native/JNI add/search buffers
 vectors=100000 | cap_batch=10240 rows, index=... s, ... vec/s, add_batch_p99=... ms | search_1k=... s, ... q/s, p50=... ms, p95=... ms, p99=... ms | memory=...
 ```
 
