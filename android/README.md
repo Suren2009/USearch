@@ -175,11 +175,15 @@ To query a large index without loading it entirely into Android process memory (
 String indexPath = context.getFilesDir().getAbsolutePath() + "/large_index.usearch";
 
 // Creates an immutable, memory-mapped view of the index file
-Index indexView = Index.viewFromPath(indexPath);
+Index indexView = Index.viewFromPath(indexPath, 30L * 1024L * 1024L);
 
 // Perform read-only search operations
 Index.SearchResult result = indexView.search(queryVec, limit, threshold, false);
 ```
+
+Passing a cap to `viewFromPath(...)` enables a bounded stored-vector cache for
+search. The full vector section remains on disk/mmap, while USearch copies only
+cap-sized chunks into RAM as graph traversal visits vector slots.
 
 ## Android KPI Benchmark
 

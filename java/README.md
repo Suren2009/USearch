@@ -76,6 +76,13 @@ clamps its per-thread cast buffer under the same cap. The cap is not serialized
 with saved indexes; pass it again through `loadFromPath(path, capBytes)`,
 `viewFromPath(path, capBytes)`, or `setMemoryCapBytes(...)`.
 
+When opening an existing index with `viewFromPath(path, capBytes)`, USearch
+memory-maps the file and uses the cap as a bounded stored-vector cache during
+graph search. That avoids copying the full stored-vector section into process
+RAM while still allowing the search graph to visit vectors across the full
+index. Mutable in-memory builds and `loadFromPath(...)` still keep stored
+vectors resident, because writes need owned vector storage.
+
 Build it with:
 
 ```sh
