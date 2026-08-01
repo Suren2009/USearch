@@ -565,14 +565,14 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1add_1f32_1buffer( //
     auto index = reinterpret_cast<index_dense_t*>(c_ptr);
     size_t dimensions = index->dimensions();
     jlong capacity = env->GetDirectBufferCapacity(vector_buffer);
-    if (capacity < 0 || capacity % static_cast<jlong>(sizeof(float)) != 0) {
+    if (capacity < 0) {
         jclass jc = env->FindClass("java/lang/IllegalArgumentException");
         if (jc) {
             env->ThrowNew(jc, "Invalid FloatBuffer capacity");
         }
         return;
     }
-    jlong vector_dims = capacity / static_cast<jlong>(sizeof(float));
+    jlong vector_dims = capacity;
     if (vector_dims % static_cast<jlong>(dimensions) != 0) {
         jclass jc = env->FindClass("java/lang/IllegalArgumentException");
         if (jc) {
@@ -613,14 +613,14 @@ JNIEXPORT void JNICALL Java_cloud_unum_usearch_Index_c_1add_1f64_1buffer( //
     auto index = reinterpret_cast<index_dense_t*>(c_ptr);
     size_t dimensions = index->dimensions();
     jlong capacity = env->GetDirectBufferCapacity(vector_buffer);
-    if (capacity < 0 || capacity % static_cast<jlong>(sizeof(double)) != 0) {
+    if (capacity < 0) {
         jclass jc = env->FindClass("java/lang/IllegalArgumentException");
         if (jc) {
             env->ThrowNew(jc, "Invalid DoubleBuffer capacity");
         }
         return;
     }
-    jlong vector_dims = capacity / static_cast<jlong>(sizeof(double));
+    jlong vector_dims = capacity;
     if (vector_dims % static_cast<jlong>(dimensions) != 0) {
         jclass jc = env->FindClass("java/lang/IllegalArgumentException");
         if (jc) {
@@ -710,7 +710,7 @@ JNIEXPORT jlongArray JNICALL Java_cloud_unum_usearch_Index_c_1search_1f32_1buffe
 
     // Dimensions are validated on Java side
     jlong capacity = env->GetDirectBufferCapacity(vector_buffer);
-    jlong vector_dims = capacity / sizeof(float);
+    jlong vector_dims = capacity;
     f32_span_t vector_span = f32_span_t{vector_data, static_cast<std::size_t>(vector_dims)};
 
     using vector_key_t = typename index_dense_t::vector_key_t;
@@ -752,7 +752,7 @@ JNIEXPORT jlongArray JNICALL Java_cloud_unum_usearch_Index_c_1search_1f64_1buffe
 
     // Dimensions are validated on Java side
     jlong capacity = env->GetDirectBufferCapacity(vector_buffer);
-    jlong vector_dims = capacity / sizeof(double);
+    jlong vector_dims = capacity;
     f64_span_t vector_span = f64_span_t{vector_data, static_cast<std::size_t>(vector_dims)};
 
     using vector_key_t = typename index_dense_t::vector_key_t;
@@ -861,7 +861,7 @@ JNIEXPORT jint JNICALL Java_cloud_unum_usearch_Index_c_1search_1into_1f32_1buffe
 
     // Dimensions are validated on Java side
     jlong query_capacity = env->GetDirectBufferCapacity(query_buffer);
-    jlong query_dims = query_capacity / sizeof(float);
+    jlong query_dims = query_capacity;
     f32_span_t query_span = f32_span_t{query_data, static_cast<std::size_t>(query_dims)};
 
     using vector_key_t = typename index_dense_t::vector_key_t;
@@ -909,7 +909,7 @@ JNIEXPORT jint JNICALL Java_cloud_unum_usearch_Index_c_1search_1into_1f64_1buffe
 
     // Dimensions are validated on Java side
     jlong query_capacity = env->GetDirectBufferCapacity(query_buffer);
-    jlong query_dims = query_capacity / sizeof(double);
+    jlong query_dims = query_capacity;
     f64_span_t query_span = f64_span_t{query_data, static_cast<std::size_t>(query_dims)};
 
     using vector_key_t = typename index_dense_t::vector_key_t;
