@@ -1,6 +1,7 @@
 package cloud.unum.usearch.demo;
 
 import android.os.Bundle;
+import android.os.Debug;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -32,6 +33,7 @@ import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
+import java.nio.LongBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
@@ -46,12 +48,17 @@ public final class MainActivity extends AppCompatActivity {
     private static final String KPI_LOG_TAG = "USearchKPI";
     private static final int KPI_DIMENSIONS = 768;
     private static final int KPI_QUERY_COUNT = 1_000;
+    private static final int KPI_RESULT_LIMIT = 10;
+    private static final long KPI_MEMORY_CAP_BYTES = 30L * 1024L * 1024L;
+    /** Random-vector KPI inserts this many fp32 rows per native add() call. */
+    private static final int KPI_RANDOM_BATCH_ROWS = 10;
     private static final String KPI_BASE_FILE = "cohere-768-base.fbin";
     private static final String KPI_QUERY_FILE = "cohere-768-query.fbin";
     private static final String COHERE_ARCHIVE_URL = "https://dbyiw3u3rf9yr.cloudfront.net/corpora/vectorsearch/cohere-wikipedia-22-12-en-embeddings/documents-1m.hdf5.bz2";
     private static final String EXTRA_DOWNLOAD_KPI_DATA = "download_kpi_data";
     private static final String EXTRA_BASE_URL = "base_url";
     private static final String EXTRA_QUERY_URL = "query_url";
+    private static final String EXTRA_RUN_KPI_RANDOM = "run_kpi_random";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -83,6 +90,7 @@ public final class MainActivity extends AppCompatActivity {
     private Button btnLoadIndex;
     private Button btnClearData;
     private Button btnRunKpi;
+    private Button btnRunKpiRandom;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -111,8 +119,9 @@ public final class MainActivity extends AppCompatActivity {
         btnLoadIndex = findViewById(R.id.btn_load_index);
         btnClearData = findViewById(R.id.btn_clear_data);
         btnRunKpi = findViewById(R.id.btn_run_kpi);
+        btnRunKpiRandom = findViewById(R.id.btn_run_kpi_random);
 
-        tvKpiStatus.setText("Ready. Run the KPI downloads the real Cohere 768D corpus on this device when needed.");
+        tvKpiStatus.setText("Ready. Cohere KPI uses on-device .fbin; Random KPI generates fp32 batches of 10 (no file mmap).");
 
         btnBuildIndex.setOnClickListener(v -> handleBuildIndex());
         btnSearch.setOnClickListener(v -> handleSearch());
@@ -120,6 +129,7 @@ public final class MainActivity extends AppCompatActivity {
         btnLoadIndex.setOnClickListener(v -> handleLoadIndex());
         btnClearData.setOnClickListener(v -> handleClearData());
         btnRunKpi.setOnClickListener(v -> handleRunKpi());
+        btnRunKpiRandom.setOnClickListener(v -> handleRunKpiRandom());
         setBusy(false);
 
         // Initialize USearch and display system info
@@ -138,9 +148,140 @@ public final class MainActivity extends AppCompatActivity {
         // UI untouched while ensuring every timed operation runs inside this process.
         if (getIntent().getBooleanExtra(EXTRA_DOWNLOAD_KPI_DATA, false)) {
             executor.execute(this::downloadKpiDataAndRun);
+        } else if (getIntent().getBooleanExtra(EXTRA_RUN_KPI_RANDOM, false)) {
+            executor.execute(this::runRandomKpiBenchmark);
         } else if (getIntent().getBooleanExtra("run_kpi", false)) {
             executor.execute(this::runDeviceKpiBenchmark);
         }
+    }
+
+    private void handleRunKpiRandom() {
+        setBusy(true);
+        executor.execute(() -> {
+            try {
+                runRandomKpiBenchmark();
+            } finally {
+                mainHandler.post(() -> setBusy(false));
+            }
+        });
+    }
+
+    /**
+     * Builds 50k / 100k indexes from freshly generated random fp32 vectors, inserted
+     * in batches of {@link #KPI_RANDOM_BATCH_ROWS}. Unlike the Cohere .fbin KPI, no
+     * dataset file is memory-mapped, so process privateDirty reflects the HNSW index
+     * (vectors + graph) plus a tiny reusable Java batch buffer.
+     */
+    private void runRandomKpiBenchmark() {
+        File reportFile = new File(getExternalFilesDir(null), "usearch-device-kpi-random.txt");
+        setKpiStatusThreadSafe("Running random-vector KPI (batch=" + KPI_RANDOM_BATCH_ROWS + ")…");
+        try (FileWriter report = new FileWriter(reportFile, false)) {
+            writeKpi(report, "device=" + android.os.Build.MODEL + ", abi=" + USearchAndroid.ABI);
+            writeKpi(report, "dataset=random fp32, metric=cos, dimensions=768, batch_rows=" + KPI_RANDOM_BATCH_ROWS);
+            writeKpi(report, "memory_cap=" + formatBytes(KPI_MEMORY_CAP_BYTES) + " for native/JNI add/search buffers");
+            writeKpi(report, "note=no .fbin mmap; vectors generated in-process per batch");
+            for (int count : new int[] {50_000, 100_000})
+                benchmarkRandomKpiSize(count, report);
+            writeKpi(report, "report=" + reportFile);
+            setKpiStatusThreadSafe("Complete. Results saved to usearch-device-kpi-random.txt.");
+        } catch (Throwable t) {
+            Log.e(KPI_LOG_TAG, "Random KPI benchmark failed", t);
+            logThreadSafe("Random KPI benchmark failed: " + t.getMessage());
+            setKpiStatusThreadSafe("Random KPI failed: " + t.getMessage());
+        }
+    }
+
+    private void benchmarkRandomKpiSize(int count, FileWriter report) throws IOException {
+        Index benchmarkIndex = null;
+        try {
+            long beforeKb = processPrivateDirtyKb();
+            benchmarkIndex = USearchAndroid.newIndexConfig()
+                    .metric(Index.Metric.COSINE)
+                    .quantization(Index.Quantization.FLOAT32)
+                    .dimensions(KPI_DIMENSIONS)
+                    .capacity(count)
+                    .connectivity(16)
+                    .expansion_add(128)
+                    .expansion_search(64)
+                    .memoryCapBytes(KPI_MEMORY_CAP_BYTES)
+                    .build();
+            benchmarkIndex.reserve(count, 1, 1);
+
+            // One reusable direct buffer for the batch (~30 KiB) — never maps a dataset file.
+            FloatBuffer batchBuf = ByteBuffer.allocateDirect(KPI_RANDOM_BATCH_ROWS * KPI_DIMENSIONS * Float.BYTES)
+                    .order(ByteOrder.nativeOrder())
+                    .asFloatBuffer();
+            Random rng = new Random(42);
+            int batches = (count + KPI_RANDOM_BATCH_ROWS - 1) / KPI_RANDOM_BATCH_ROWS;
+            long[] addLatenciesNs = new long[batches];
+
+            long indexStartNs = SystemClock.elapsedRealtimeNanos();
+            for (int i = 0, batchIdx = 0; i < count; i += KPI_RANDOM_BATCH_ROWS, batchIdx++) {
+                int rowsThisBatch = Math.min(KPI_RANDOM_BATCH_ROWS, count - i);
+                int floatsThisBatch = rowsThisBatch * KPI_DIMENSIONS;
+                batchBuf.clear();
+                for (int f = 0; f < floatsThisBatch; f++)
+                    batchBuf.put(rng.nextFloat() * 2.0f - 1.0f);
+                batchBuf.flip();
+                long startNs = SystemClock.elapsedRealtimeNanos();
+                benchmarkIndex.add(i, batchBuf);
+                addLatenciesNs[batchIdx] = SystemClock.elapsedRealtimeNanos() - startNs;
+                if ((batchIdx + 1) % 500 == 0 || i + rowsThisBatch >= count) {
+                    setKpiStatusThreadSafe(String.format(Locale.US,
+                            "Random insert %d: %d / %d (%.0f%%)",
+                            count, i + rowsThisBatch, count, 100.0 * (i + rowsThisBatch) / count));
+                }
+            }
+            long indexElapsedNs = SystemClock.elapsedRealtimeNanos() - indexStartNs;
+            long afterInsertKb = processPrivateDirtyKb();
+
+            // Search uses a tiny reusable direct query buffer (no mapped query file).
+            FloatBuffer queryBuf = ByteBuffer.allocateDirect(KPI_DIMENSIONS * Float.BYTES)
+                    .order(ByteOrder.nativeOrder())
+                    .asFloatBuffer();
+            LongBuffer results = ByteBuffer.allocateDirect(KPI_RESULT_LIMIT * Long.BYTES)
+                    .order(ByteOrder.nativeOrder())
+                    .asLongBuffer();
+            for (int i = 0; i < 100; i++) {
+                fillRandomDirect(rng, queryBuf, KPI_DIMENSIONS);
+                results.clear();
+                benchmarkIndex.searchInto(queryBuf, results, KPI_RESULT_LIMIT);
+            }
+            long[] searchLatenciesNs = new long[KPI_QUERY_COUNT];
+            long searchStartNs = SystemClock.elapsedRealtimeNanos();
+            for (int i = 0; i < KPI_QUERY_COUNT; i++) {
+                fillRandomDirect(rng, queryBuf, KPI_DIMENSIONS);
+                results.clear();
+                long startNs = SystemClock.elapsedRealtimeNanos();
+                benchmarkIndex.searchInto(queryBuf, results, KPI_RESULT_LIMIT);
+                searchLatenciesNs[i] = SystemClock.elapsedRealtimeNanos() - startNs;
+            }
+            long searchElapsedNs = SystemClock.elapsedRealtimeNanos() - searchStartNs;
+            long afterSearchKb = processPrivateDirtyKb();
+
+            String line = String.format(Locale.US,
+                    "vectors=%d | mode=random-fp32(insert) | batch=%d rows, index=%.3f s, %.0f vec/s, " +
+                    "add_batch_p99=%.3f ms | search_1k=%.3f s, %.0f q/s, p50=%.3f ms, p95=%.3f ms, p99=%.3f ms | " +
+                    "index_mem=%s | privateDirty: before=%.1f MB, afterInsert=%.1f MB, afterSearch=%.1f MB | %s",
+                    count, KPI_RANDOM_BATCH_ROWS,
+                    indexElapsedNs / 1e9, count / (indexElapsedNs / 1e9), percentileMs(addLatenciesNs, 99),
+                    searchElapsedNs / 1e9, KPI_QUERY_COUNT / (searchElapsedNs / 1e9),
+                    percentileMs(searchLatenciesNs, 50), percentileMs(searchLatenciesNs, 95),
+                    percentileMs(searchLatenciesNs, 99),
+                    formatBytes(benchmarkIndex.memoryUsage()),
+                    beforeKb / 1024.0, afterInsertKb / 1024.0, afterSearchKb / 1024.0,
+                    memSnapshot());
+            writeKpi(report, line);
+        } finally {
+            if (benchmarkIndex != null) benchmarkIndex.close();
+        }
+    }
+
+    private static void fillRandomDirect(Random rng, FloatBuffer dest, int count) {
+        dest.clear();
+        for (int i = 0; i < count; i++)
+            dest.put(rng.nextFloat() * 2.0f - 1.0f);
+        dest.flip();
     }
 
     /**
@@ -226,17 +367,27 @@ public final class MainActivity extends AppCompatActivity {
 
     private void convertHdf5ToFbin(File hdf5, File base, File query) throws IOException {
         try (HdfFile file = new HdfFile(hdf5)) {
-            writeFbin((float[][]) file.getDatasetByPath("train").getData(new long[] {0, 0}, new int[] {100_000, KPI_DIMENSIONS}), base);
-            writeFbin((float[][]) file.getDatasetByPath("test").getData(new long[] {0, 0}, new int[] {KPI_QUERY_COUNT, KPI_DIMENSIONS}), query);
+            writeFbin(file.getDatasetByPath("train"), 100_000, base);
+            writeFbin(file.getDatasetByPath("test"), KPI_QUERY_COUNT, query);
         }
     }
 
-    private static void writeFbin(float[][] vectors, File destination) throws IOException {
+    private static void writeFbin(Dataset dataset, int rows, File destination) throws IOException {
         try (FileOutputStream stream = new FileOutputStream(destination)) {
-            ByteBuffer header = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(vectors.length).putInt(KPI_DIMENSIONS);
+            ByteBuffer header = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(rows).putInt(KPI_DIMENSIONS);
             stream.write(header.array());
             ByteBuffer row = ByteBuffer.allocate(KPI_DIMENSIONS * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
-            for (float[] vector : vectors) { row.clear(); row.asFloatBuffer().put(vector, 0, KPI_DIMENSIONS); stream.write(row.array()); }
+            int rowsPerBatch = rowsPerMemoryCap();
+            for (int offset = 0; offset < rows; offset += rowsPerBatch) {
+                int rowsThisBatch = Math.min(rowsPerBatch, rows - offset);
+                float[][] vectors = (float[][]) dataset.getData(
+                        new long[] {offset, 0}, new int[] {rowsThisBatch, KPI_DIMENSIONS});
+                for (float[] vector : vectors) {
+                    row.clear();
+                    row.asFloatBuffer().put(vector, 0, KPI_DIMENSIONS);
+                    stream.write(row.array());
+                }
+            }
         }
     }
 
@@ -354,6 +505,7 @@ public final class MainActivity extends AppCompatActivity {
 
             writeKpi(report, "device=" + android.os.Build.MODEL + ", abi=" + USearchAndroid.ABI);
             writeKpi(report, "dataset=ANN-Benchmarks cohere-768-angular, dtype=f32, metric=cos, dimensions=768");
+            writeKpi(report, "memory_cap=" + formatBytes(KPI_MEMORY_CAP_BYTES) + " for native/JNI add/search buffers");
             writeKpi(report, "base=" + baseFile + ", queries=" + queryFile);
             for (int count : new int[] {50_000, 100_000})
                 benchmarkKpiSize(base, queries, count, report);
@@ -377,45 +529,126 @@ public final class MainActivity extends AppCompatActivity {
                     .connectivity(16)
                     .expansion_add(128)
                     .expansion_search(64)
+                    .memoryCapBytes(KPI_MEMORY_CAP_BYTES)
                     .build();
             benchmarkIndex.reserve(count, 1, 1); // Single thread makes per-add latency meaningful.
 
-            float[] vector = new float[KPI_DIMENSIONS];
-            long[] addLatenciesNs = new long[count];
+            int rowsPerBatch = rowsPerMemoryCap();
+            long[] addLatenciesNs = new long[(count + rowsPerBatch - 1) / rowsPerBatch];
             long indexStartNs = SystemClock.elapsedRealtimeNanos();
-            for (int i = 0; i < count; i++) {
-                base.copyRow(i, vector);
+            for (int i = 0, batch = 0; i < count; i += rowsPerBatch, batch++) {
+                int rowsThisBatch = Math.min(rowsPerBatch, count - i);
                 long startNs = SystemClock.elapsedRealtimeNanos();
-                benchmarkIndex.add(i, vector);
-                addLatenciesNs[i] = SystemClock.elapsedRealtimeNanos() - startNs;
+                benchmarkIndex.add(i, base.sliceRows(i, rowsThisBatch));
+                addLatenciesNs[batch] = SystemClock.elapsedRealtimeNanos() - startNs;
             }
             long indexElapsedNs = SystemClock.elapsedRealtimeNanos() - indexStartNs;
 
+            LongBuffer results = ByteBuffer.allocateDirect(KPI_RESULT_LIMIT * Long.BYTES)
+                    .order(ByteOrder.nativeOrder())
+                    .asLongBuffer();
             // Warm up native dispatch and memory paths; warm-up samples are excluded.
             for (int i = 0; i < 100; i++) {
-                queries.copyRow(i, vector);
-                benchmarkIndex.search(vector, 10);
+                results.clear();
+                benchmarkIndex.searchInto(queries.sliceRows(i, 1), results, KPI_RESULT_LIMIT);
             }
             long[] searchLatenciesNs = new long[KPI_QUERY_COUNT];
             long searchStartNs = SystemClock.elapsedRealtimeNanos();
             for (int i = 0; i < KPI_QUERY_COUNT; i++) {
-                queries.copyRow(i, vector);
+                results.clear();
                 long startNs = SystemClock.elapsedRealtimeNanos();
-                benchmarkIndex.search(vector, 10);
+                benchmarkIndex.searchInto(queries.sliceRows(i, 1), results, KPI_RESULT_LIMIT);
                 searchLatenciesNs[i] = SystemClock.elapsedRealtimeNanos() - startNs;
             }
             long searchElapsedNs = SystemClock.elapsedRealtimeNanos() - searchStartNs;
 
+            long inRamPrivateDirtyKb = processPrivateDirtyKb();
             String result = String.format(Locale.US,
-                    "vectors=%d | index=%.3f s, %.0f vec/s, add_p99=%.3f ms | " +
-                    "search_1k=%.3f s, %.0f q/s, p50=%.3f ms, p95=%.3f ms, p99=%.3f ms | memory=%s",
-                    count, indexElapsedNs / 1e9, count / (indexElapsedNs / 1e9), percentileMs(addLatenciesNs, 99),
+                    "vectors=%d | mode=in-RAM(insert) | cap_batch=%d rows, index=%.3f s, %.0f vec/s, add_batch_p99=%.3f ms | " +
+                    "search_1k=%.3f s, %.0f q/s, p50=%.3f ms, p95=%.3f ms, p99=%.3f ms | index_mem=%s | %s",
+                    count, rowsPerBatch, indexElapsedNs / 1e9, count / (indexElapsedNs / 1e9), percentileMs(addLatenciesNs, 99),
                     searchElapsedNs / 1e9, KPI_QUERY_COUNT / (searchElapsedNs / 1e9), percentileMs(searchLatenciesNs, 50),
-                    percentileMs(searchLatenciesNs, 95), percentileMs(searchLatenciesNs, 99), formatBytes(benchmarkIndex.memoryUsage()));
+                    percentileMs(searchLatenciesNs, 95), percentileMs(searchLatenciesNs, 99),
+                    formatBytes(benchmarkIndex.memoryUsage()), memSnapshot());
             writeKpi(report, result);
+
+            // Memory-mapped view: keep the built vectors + graph on disk and cap the
+            // RAM-resident vector cache. This is where "RAM ~= cap + touched graph"
+            // actually holds, unlike the in-RAM insert path above.
+            // NOTE: use internal storage (real ext4). Native mmap in view() fails with
+            // EPERM on FUSE-backed external storage (getExternalFilesDir).
+            File viewFile = new File(getFilesDir(), "kpi-index-" + count + ".usearch");
+            benchmarkIndex.save(viewFile.getAbsolutePath());
+            benchmarkIndex.close();
+            benchmarkIndex = null; // released; the view opens the same data from disk.
+            benchmarkViewSearch(queries, count, viewFile, results, inRamPrivateDirtyKb, report);
         } finally {
             if (benchmarkIndex != null) benchmarkIndex.close();
         }
+    }
+
+    /**
+     * Releases the in-RAM copy, then reopens the saved index as a capped memory-mapped
+     * view and repeats the 1k-query search. Records the process private-dirty RAM at
+     * each phase so the in-RAM (insert) footprint can be compared directly against the
+     * disk-backed (view/search) footprint.
+     */
+    private void benchmarkViewSearch(FbinMatrix queries, int count, File viewFile, LongBuffer results,
+                                     long inRamPrivateDirtyKb, FileWriter report) throws IOException {
+        System.gc();
+        try { Thread.sleep(750); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+        long afterCloseKb = processPrivateDirtyKb();
+
+        Index viewIndex = null;
+        try {
+            viewIndex = Index.viewFromPath(viewFile.getAbsolutePath(), KPI_MEMORY_CAP_BYTES);
+            long afterOpenKb = processPrivateDirtyKb();
+
+            for (int i = 0; i < 100; i++) {
+                results.clear();
+                viewIndex.searchInto(queries.sliceRows(i, 1), results, KPI_RESULT_LIMIT);
+            }
+            long[] viewSearchNs = new long[KPI_QUERY_COUNT];
+            long viewSearchStartNs = SystemClock.elapsedRealtimeNanos();
+            for (int i = 0; i < KPI_QUERY_COUNT; i++) {
+                results.clear();
+                long startNs = SystemClock.elapsedRealtimeNanos();
+                viewIndex.searchInto(queries.sliceRows(i, 1), results, KPI_RESULT_LIMIT);
+                viewSearchNs[i] = SystemClock.elapsedRealtimeNanos() - startNs;
+            }
+            long viewSearchElapsedNs = SystemClock.elapsedRealtimeNanos() - viewSearchStartNs;
+            long afterSearchKb = processPrivateDirtyKb();
+
+            String viewResult = String.format(Locale.US,
+                    "vectors=%d | mode=mmap-view(search), cap=%s | search_1k=%.3f s, %.0f q/s, " +
+                    "p50=%.3f ms, p95=%.3f ms, p99=%.3f ms | privateDirty: inRAM=%.1f MB -> afterClose=%.1f MB, " +
+                    "afterViewOpen=%.1f MB, afterViewSearch=%.1f MB | %s",
+                    count, formatBytes(KPI_MEMORY_CAP_BYTES),
+                    viewSearchElapsedNs / 1e9, KPI_QUERY_COUNT / (viewSearchElapsedNs / 1e9),
+                    percentileMs(viewSearchNs, 50), percentileMs(viewSearchNs, 95), percentileMs(viewSearchNs, 99),
+                    inRamPrivateDirtyKb / 1024.0, afterCloseKb / 1024.0, afterOpenKb / 1024.0,
+                    afterSearchKb / 1024.0, memSnapshot());
+            writeKpi(report, viewResult);
+        } finally {
+            if (viewIndex != null) viewIndex.close();
+            if (viewFile.exists() && !viewFile.delete())
+                Log.w(KPI_LOG_TAG, "Retained KPI index file: " + viewFile);
+        }
+    }
+
+    /** Process-wide private-dirty RAM in KB (anonymous, non-reclaimable pages ~= the in-RAM index cost). */
+    private static long processPrivateDirtyKb() {
+        Debug.MemoryInfo info = new Debug.MemoryInfo();
+        Debug.getMemoryInfo(info);
+        return info.getTotalPrivateDirty();
+    }
+
+    /** Human-readable process memory summary for the KPI report. */
+    private static String memSnapshot() {
+        Debug.MemoryInfo info = new Debug.MemoryInfo();
+        Debug.getMemoryInfo(info);
+        return String.format(Locale.US, "proc_pss=%.1f MB, proc_privateDirty=%.1f MB",
+                info.getTotalPss() / 1024.0, info.getTotalPrivateDirty() / 1024.0);
     }
 
     private static double percentileMs(long[] samplesNs, int percentile) {
@@ -466,10 +699,15 @@ public final class MainActivity extends AppCompatActivity {
             }
         }
 
-        void copyRow(int row, float[] target) {
+        FloatBuffer sliceRows(int row, int count) {
             FloatBuffer view = values.duplicate();
             view.position(row * columns);
-            view.get(target, 0, columns);
+            view.limit((row + count) * columns);
+            return view.slice();
+        }
+
+        void copyRow(int row, float[] target) {
+            sliceRows(row, 1).get(target, 0, columns);
         }
 
         @Override public void close() throws IOException { channel.close(); }
@@ -921,6 +1159,7 @@ public final class MainActivity extends AppCompatActivity {
         btnLoadIndex.setEnabled(!busy);
         btnClearData.setEnabled(!busy);
         btnRunKpi.setEnabled(!busy);
+        btnRunKpiRandom.setEnabled(!busy);
         btnSearch.setEnabled(!busy && index != null);
         btnSaveIndex.setEnabled(!busy && index != null);
     }
@@ -947,6 +1186,11 @@ public final class MainActivity extends AppCompatActivity {
         int exp = (int) (Math.log(bytes) / Math.log(1024));
         char pre = "KMGTPE".charAt(exp - 1);
         return String.format(Locale.US, "%.2f %cB", bytes / Math.pow(1024, exp), pre);
+    }
+
+    private static int rowsPerMemoryCap() {
+        long rowBytes = (long) KPI_DIMENSIONS * Float.BYTES;
+        return (int) Math.max(1L, KPI_MEMORY_CAP_BYTES / rowBytes);
     }
 
     @Override

@@ -137,6 +137,17 @@ struct index_dense_config_t : public index_config_t {
      */
     bool enable_key_lookups = true;
 
+    /**
+     *  @brief  Maximum bytes reserved for transient per-operation cast buffers.
+     *          Zero keeps the legacy unlimited behavior.
+     *
+     *  This configuration parameter doesn't affect the serialized file and is
+     *  not preserved between runs. It bounds the dense wrapper's internal
+     *  `threads * bytes_per_vector()` staging buffer used when add/search inputs
+     *  must be cast into the index scalar type.
+     */
+    std::size_t memory_cap = 0;
+
     inline index_dense_config_t(index_config_t base) noexcept : index_config_t(base) {}
 
     inline index_dense_config_t(std::size_t c = 0, std::size_t ea = 0, std::size_t es = 0) noexcept
@@ -440,10 +451,14 @@ class index_dense_gt {
       public:
         metric_proxy_t(index_dense_gt const& index) noexcept : index_(&index) {}
 
-        inline distance_t operator()(byte_t const* a, member_cref_t b) const noexcept { return f(a, v(b)); }
+        inline distance_t operator()(byte_t const* a, member_cref_t b) const noexcept {
+            return index_->distance_to_slot_(a, get_slot(b));
+        }
         inline distance_t operator()(member_cref_t a, member_cref_t b) const noexcept { return f(v(a), v(b)); }
 
-        inline distance_t operator()(byte_t const* a, member_citerator_t b) const noexcept { return f(a, v(b)); }
+        inline distance_t operator()(byte_t const* a, member_citerator_t b) const noexcept {
+            return index_->distance_to_slot_(a, get_slot(b));
+        }
         inline distance_t operator()(member_citerator_t a, member_citerator_t b) const noexcept {
             return f(v(a), v(b));
         }
@@ -462,6 +477,15 @@ class index_dense_gt {
 
     /// @brief  Temporary memory for every thread to store a casted vector.
     mutable cast_buffer_t cast_buffer_;
+
+    /// @brief Optional bounded RAM cache for stored vectors viewed from disk.
+    mutable cast_buffer_t vectors_cache_;
+    mutable std::size_t vectors_cache_first_slot_ = (std::numeric_limits<std::size_t>::max)();
+    mutable std::size_t vectors_cache_slots_ = 0;
+    span_punned_t vectors_view_;
+    std::size_t vectors_view_rows_ = 0;
+    std::size_t vectors_view_bytes_per_vector_ = 0;
+    mutable std::mutex vectors_cache_mutex_;
     casts_punned_t casts_;
 
     /// @brief An instance of a potentially stateful `metric_t` used to initialize copies and forks.
@@ -555,6 +579,45 @@ class index_dense_gt {
         }
     };
 
+    bool try_fit_memory_cap_(index_limits_t& limits) const noexcept {
+        if (!config_.memory_cap)
+            return true;
+        std::size_t bytes_per_vector = metric_.bytes_per_vector();
+        if (!bytes_per_vector)
+            return true;
+        std::size_t max_threads = config_.memory_cap / bytes_per_vector;
+        if (!max_threads)
+            return false;
+        limits.threads_add = (std::min)(limits.threads_add, max_threads);
+        limits.threads_search = (std::min)(limits.threads_search, max_threads);
+        return true;
+    }
+
+    bool uses_vectors_cache_() const noexcept { return vectors_cache_ && vectors_cache_slots_ && vectors_view_.data(); }
+
+    byte_t const* cached_vector_(std::size_t slot) const noexcept {
+        usearch_assert_m(uses_vectors_cache_(), "Stored vector cache is disabled");
+        std::size_t bytes_per_vector = vectors_view_bytes_per_vector_;
+        bool cache_hit = vectors_cache_first_slot_ != (std::numeric_limits<std::size_t>::max)() &&
+                         slot >= vectors_cache_first_slot_ &&
+                         slot < vectors_cache_first_slot_ + vectors_cache_slots_;
+        if (!cache_hit) {
+            std::size_t first_slot = (slot / vectors_cache_slots_) * vectors_cache_slots_;
+            std::size_t slots_to_copy = (std::min)(vectors_cache_slots_, vectors_view_rows_ - first_slot);
+            std::memcpy(vectors_cache_.data(), vectors_view_.data() + first_slot * bytes_per_vector,
+                        slots_to_copy * bytes_per_vector);
+            vectors_cache_first_slot_ = first_slot;
+        }
+        return vectors_cache_.data() + (slot - vectors_cache_first_slot_) * bytes_per_vector;
+    }
+
+    distance_t distance_to_slot_(byte_t const* a, compressed_slot_t slot) const noexcept {
+        if (!uses_vectors_cache_())
+            return metric_(a, vectors_lookup_[slot]);
+        std::lock_guard<std::mutex> lock(vectors_cache_mutex_);
+        return metric_(a, cached_vector_(slot));
+    }
+
   public:
     using cluster_result_t = typename index_t::cluster_result_t;
     using add_result_t = typename index_t::add_result_t;
@@ -590,6 +653,12 @@ class index_dense_gt {
 
           typed_(exchange(other.typed_, nullptr)),     //
           cast_buffer_(std::move(other.cast_buffer_)), //
+          vectors_cache_(std::move(other.vectors_cache_)),
+          vectors_cache_first_slot_(std::move(other.vectors_cache_first_slot_)),
+          vectors_cache_slots_(std::move(other.vectors_cache_slots_)),
+          vectors_view_(std::move(other.vectors_view_)),
+          vectors_view_rows_(std::move(other.vectors_view_rows_)),
+          vectors_view_bytes_per_vector_(std::move(other.vectors_view_bytes_per_vector_)),
           casts_(std::move(other.casts_)),             //
           metric_(std::move(other.metric_)),           //
 
@@ -615,6 +684,12 @@ class index_dense_gt {
 
         std::swap(typed_, other.typed_);
         std::swap(cast_buffer_, other.cast_buffer_);
+        std::swap(vectors_cache_, other.vectors_cache_);
+        std::swap(vectors_cache_first_slot_, other.vectors_cache_first_slot_);
+        std::swap(vectors_cache_slots_, other.vectors_cache_slots_);
+        std::swap(vectors_view_, other.vectors_view_);
+        std::swap(vectors_view_rows_, other.vectors_view_rows_);
+        std::swap(vectors_view_bytes_per_vector_, other.vectors_view_bytes_per_vector_);
         std::swap(casts_, other.casts_);
         std::swap(metric_, other.metric_);
 
@@ -734,6 +809,8 @@ class index_dense_gt {
         checked_size_result_t needed_bytes = checked_mul(limits().threads(), metric.bytes_per_vector());
         if (!needed_bytes)
             return false;
+        if (config_.memory_cap && needed_bytes.value > config_.memory_cap)
+            return false;
         if (needed_bytes.value > cast_buffer_.size()) {
             cast_buffer_t new_buffer(needed_bytes.value);
             if (!new_buffer)
@@ -756,6 +833,25 @@ class index_dense_gt {
     std::size_t bytes_per_vector() const { return metric_.bytes_per_vector(); }
     std::size_t scalar_words() const { return metric_.scalar_words(); }
     std::size_t dimensions() const { return metric_.dimensions(); }
+    std::size_t memory_cap() const { return config_.memory_cap; }
+
+    /**
+     *  @brief  Changes the transient cast-buffer cap.
+     *  @return @c false if the current per-thread buffer already exceeds the
+     *          requested cap.
+     */
+    bool try_change_memory_cap(std::size_t memory_cap) noexcept {
+        if (memory_cap && cast_buffer_.size() > memory_cap)
+            return false;
+        config_.memory_cap = memory_cap;
+        return true;
+    }
+
+    /// @brief Throwing counterpart of @ref try_change_memory_cap.
+    void change_memory_cap(std::size_t memory_cap) {
+        if (!try_change_memory_cap(memory_cap))
+            usearch_raise_runtime_error("memory cap is smaller than the current operation buffer");
+    }
 
     // Fetching and changing search criteria
     std::size_t expansion_add() const { return config_.expansion_add; }
@@ -1050,6 +1146,9 @@ class index_dense_gt {
      */
     bool try_reserve(index_limits_t limits) {
 
+        if (!try_fit_memory_cap_(limits))
+            return false;
+
         // The slot lookup system will generally prefer power-of-two sizes.
         if (config_.enable_key_lookups) {
             unique_lock_t lock(slot_lookup_mutex_);
@@ -1082,6 +1181,8 @@ class index_dense_gt {
         // Allocate a buffer for the casted vectors.
         checked_size_result_t cast_buffer_bytes = checked_mul(limits.threads(), metric_.bytes_per_vector());
         if (!cast_buffer_bytes)
+            return false;
+        if (config_.memory_cap && cast_buffer_bytes.value > config_.memory_cap)
             return false;
         cast_buffer_t cast_buffer(cast_buffer_bytes.value);
         if (!cast_buffer)
@@ -1133,6 +1234,12 @@ class index_dense_gt {
         vectors_lookup_.reset();
         free_keys_.clear();
         vectors_tape_allocator_.reset();
+        vectors_cache_.reset();
+        vectors_cache_first_slot_ = (std::numeric_limits<std::size_t>::max)();
+        vectors_cache_slots_ = 0;
+        vectors_view_ = {};
+        vectors_view_rows_ = 0;
+        vectors_view_bytes_per_vector_ = 0;
         available_threads_.reset();
     }
 
@@ -1297,9 +1404,13 @@ class index_dense_gt {
 
             config_.multi = head.multi;
             metric_ = metric_t::builtin(head.dimensions, head.kind_metric, head.kind_scalar);
+            if (!try_fit_memory_cap_(new_limits))
+                return result.failed("Memory cap is smaller than one operation buffer");
             checked_size_result_t cast_buffer_bytes = checked_mul(new_limits.threads(), metric_.bytes_per_vector());
             if (!cast_buffer_bytes)
                 return result.failed("Failed to allocate memory for the casts");
+            if (config_.memory_cap && cast_buffer_bytes.value > config_.memory_cap)
+                return result.failed("Memory cap is smaller than the requested operation buffer");
             cast_buffer_ = cast_buffer_t(cast_buffer_bytes.value);
             if (!cast_buffer_)
                 return result.failed("Failed to allocate memory for the casts");
@@ -1415,9 +1526,13 @@ class index_dense_gt {
             config_.multi = head.multi;
             metric_ = metric_t::builtin(head.dimensions, head.kind_metric, head.kind_scalar);
             // available_threads_.size() will be updated to old_limits.threads() later in this
+            if (!try_fit_memory_cap_(new_limits))
+                return result.failed("Memory cap is smaller than one operation buffer");
             checked_size_result_t cast_buffer_bytes = checked_mul(new_limits.threads(), metric_.bytes_per_vector());
             if (!cast_buffer_bytes)
                 return result.failed("Failed to allocate memory for the casts");
+            if (config_.memory_cap && cast_buffer_bytes.value > config_.memory_cap)
+                return result.failed("Memory cap is smaller than the requested operation buffer");
             cast_buffer_ = cast_buffer_t(cast_buffer_bytes.value);
             if (!cast_buffer_)
                 return result.failed("Failed to allocate memory for the casts");
@@ -1446,9 +1561,27 @@ class index_dense_gt {
         vectors_lookup_ = vectors_lookup_t(matrix_rows);
         if (!vectors_lookup_)
             return result.failed("Failed to allocate memory to address vectors");
-        if (!config.exclude_vectors)
+        if (!config.exclude_vectors) {
+            vectors_view_ = vectors_buffer;
+            vectors_view_rows_ = static_cast<std::size_t>(matrix_rows);
+            vectors_view_bytes_per_vector_ = static_cast<std::size_t>(matrix_cols);
+            if (config_.memory_cap) {
+                std::size_t cache_slots = config_.memory_cap / vectors_view_bytes_per_vector_;
+                if (!cache_slots)
+                    return result.failed("Memory cap is smaller than one stored vector");
+                cache_slots = (std::min)(cache_slots, vectors_view_rows_);
+                checked_size_result_t cache_bytes = checked_mul(cache_slots, vectors_view_bytes_per_vector_);
+                if (!cache_bytes)
+                    return result.failed("Stored vector cache size overflow");
+                vectors_cache_ = cast_buffer_t(cache_bytes.value);
+                if (!vectors_cache_)
+                    return result.failed("Failed to allocate stored vector cache");
+                vectors_cache_slots_ = cache_slots;
+                vectors_cache_first_slot_ = (std::numeric_limits<std::size_t>::max)();
+            }
             for (std::uint64_t slot = 0; slot != matrix_rows; ++slot)
                 vectors_lookup_[slot] = (byte_t*)vectors_buffer.data() + matrix_cols * slot;
+        }
 
         // After the index is viewed, resize `available_threads_` to match the new limits.
         available_threads_t available_threads;

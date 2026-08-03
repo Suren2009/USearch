@@ -99,6 +99,17 @@
                     android:textColor="#000000"
                     android:textStyle="bold"
                     app:cornerRadius="8dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_run_kpi_random"
+                    android:layout_width="match_parent"
+                    android:layout_height="52dp"
+                    android:layout_marginTop="12dp"
+                    android:text="Run the KPI with Random Vectors"
+                    android:backgroundTint="#69F0AE"
+                    android:textColor="#000000"
+                    android:textStyle="bold"
+                    app:cornerRadius="8dp" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

@@ -60,11 +60,28 @@ try (Index index = USearchAndroid.newIndexConfig()
         .quantization(Index.Quantization.FLOAT32)
         .dimensions(3)
         .capacity(100)
+        .memoryCapMb(30)
         .build()) {
     index.add(42L, new float[]{0.1f, 0.2f, 0.3f});
     long[] keys = index.search(new float[]{0.1f, 0.2f, 0.3f}, 10);
 }
 ```
+
+For large Java/Android batches, `memoryCapBytes(...)` / `memoryCapMb(...)`
+limits both the JNI input window and the native dense-index operation buffer.
+For example, 100k 768D `float32` vectors require about 293 MiB of input data,
+but with `.memoryCapMb(30)` the binding splits flat arrays or direct buffers
+into row-aligned chunks of at most 30 MiB per native call, and the native index
+clamps its per-thread cast buffer under the same cap. The cap is not serialized
+with saved indexes; pass it again through `loadFromPath(path, capBytes)`,
+`viewFromPath(path, capBytes)`, or `setMemoryCapBytes(...)`.
+
+When opening an existing index with `viewFromPath(path, capBytes)`, USearch
+memory-maps the file and uses the cap as a bounded stored-vector cache during
+graph search. That avoids copying the full stored-vector section into process
+RAM while still allowing the search graph to visit vectors across the full
+index. Mutable in-memory builds and `loadFromPath(...)` still keep stored
+vectors resident, because writes need owned vector storage.
 
 Build it with:
 
